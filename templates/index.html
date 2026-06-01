@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>企业微信动态IP配置助手</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f4f4f9; }
+        .card { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: inline-block; max-width: 500px; width: 100%; }
+        h1 { color: #333; }
+        .status { margin: 20px 0; font-size: 1.2em; font-weight: bold; }
+        .status.online { color: #28a745; }
+        .status.offline { color: #dc3545; }
+        img { max-width: 100%; border-radius: 8px; margin-top: 20px; }
+        .info { color: #666; font-size: 0.9em; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>企业微信动态IP助手</h1>
+        <div class="status {% if status == '正常运行中' %}online{% else %}offline{% endif %}">
+            当前状态: {{ status }}
+        </div>
+        <p>当前记录的 IP: {{ current_ip }}</p>
+        
+        {% if need_login %}
+            <p style="color: #dc3545; font-weight: bold;">Cookie 已失效，请使用企业微信扫码登录</p>
+            {% if qr_exists %}
+                <img src="/qr.png?t={{ time }}" alt="扫码登录">
+            {% else %}
+                <p>正在获取二维码，请稍候刷新页面...</p>
+            {% endif %}
+        {% endif %}
+        
+        <div class="info">后台每隔一定时间自动检查IP并更新。</div>
+    </div>
+</body>
+</html>
