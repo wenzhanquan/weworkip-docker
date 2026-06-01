@@ -1,0 +1,14 @@
+version: '3'
+services:
+  weworkip:
+    image: your-dockerhub-username/weworkip:latest # 这里后续换成你的镜像名
+    container_name: weworkip
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - WECHAT_URLS=https://work.weixin.qq.com/wework_admin/frame#/apps/modApiApp/00000000000,第二个应用地址如果需要
+      - CHECK_CRON=*/11 * * * *
+      - OVERWRITE=True
+    volumes:
+      - ./data:/app/data   # 最重要的一步：持久化Cookie
