@@ -3,3 +3,4 @@ requests
 apscheduler
 Flask
 pytz
+tzdata
