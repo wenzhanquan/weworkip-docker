@@ -4,6 +4,7 @@ import time
 import re
 import logging
 from datetime import datetime
+import pytz  # 新增：用于解决容器默认 UTC 时区导致的定时任务报错
 from urllib.parse import urljoin
 import requests
 from flask import Flask, render_template, send_from_directory
@@ -29,7 +30,7 @@ GLOBAL_STATE = {
     "status": "初始化中",
     "need_login": True,
     "current_ip": "192.168.1.1",
-    "is_fetching": False  # 新增：防止频繁点击获取二维码导致浏览器多开
+    "is_fetching": False  # 防止频繁点击获取二维码导致浏览器多开
 }
 
 app = Flask(__name__)
@@ -231,8 +232,12 @@ def refresh_qr_api():
     if os.path.exists(QR_PATH):
         os.remove(QR_PATH)
         
-    # 异步触发获取任务
-    scheduler.add_job(func=do_login_and_save_cookie, trigger='date', run_date=datetime.now())
+    # 修复：明确指定上海时区，避免 8 小时 UTC 偏差导致任务被抛弃
+    scheduler.add_job(
+        func=do_login_and_save_cookie, 
+        trigger='date', 
+        run_date=datetime.now(pytz.timezone("Asia/Shanghai"))
+    )
     return {"status": "success", "msg": "已触发重新获取"}
 
 
@@ -248,8 +253,12 @@ if __name__ == "__main__":
     scheduler.add_job(func=check_task, trigger=CronTrigger.from_crontab(CHECK_CRON), name="IP_Checker")
     scheduler.start()
 
-    # 马上异步触发一次检查
-    scheduler.add_job(func=check_task, trigger='date', run_date=datetime.now())
+    # 修复：明确指定上海时区，马上异步触发一次检查
+    scheduler.add_job(
+        func=check_task, 
+        trigger='date', 
+        run_date=datetime.now(pytz.timezone("Asia/Shanghai"))
+    )
 
     # 启动Web服务器
     app.run(host='0.0.0.0', port=8080)
