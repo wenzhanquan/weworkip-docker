@@ -4,7 +4,7 @@ import time
 import re
 import logging
 from datetime import datetime
-import pytz  # 新增：用于解决容器默认 UTC 时区导致的定时任务报错
+import pytz  # 用于解决容器默认 UTC 时区导致的定时任务报错
 from urllib.parse import urljoin
 import requests
 from flask import Flask, render_template, send_from_directory
@@ -127,6 +127,8 @@ def update_wechat_ip(ip_address):
         do_login_and_save_cookie()
         return
 
+    need_relogin = False  # 用标志位记录是否需要重新登录，避免嵌套 Playwright 崩溃
+
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -138,44 +140,47 @@ def update_wechat_ip(ip_address):
             page.goto(WECHAT_URLS[0])
             time.sleep(2)
             if page.locator('.login_stage_title_text').is_visible():
-                logger.info("Cookie失效，触发重新登录")
-                browser.close()
-                do_login_and_save_cookie()
-                return
-            
-            GLOBAL_STATE["need_login"] = False
-            GLOBAL_STATE["status"] = "正常运行中"
+                logger.info("检测到 Cookie 失效...")
+                need_relogin = True  # 标记为需要重新登录
+            else:
+                GLOBAL_STATE["need_login"] = False
+                GLOBAL_STATE["status"] = "正常运行中"
 
-            # 遍历应用更新IP
-            for url in WECHAT_URLS:
-                if not url.strip(): continue
-                logger.info(f"正在配置应用IP...")
-                page.goto(url)
-                
-                # 这里根据MP原版插件逻辑，点击修改并输入IP
-                page.wait_for_selector('div.app_card_operate.js_show_ipConfig_dialog')
-                page.locator('div.app_card_operate.js_show_ipConfig_dialog').click()
-                page.wait_for_selector('textarea.js_ipConfig_textarea')
-                
-                input_area = page.locator('textarea.js_ipConfig_textarea')
-                confirm_btn = page.locator('.js_ipConfig_confirmBtn')
-                
-                existing_ip = input_area.input_value()
-                if OVERWRITE:
-                    input_area.fill(ip_address)
-                else:
-                    # 去重并添加
-                    ips = set(existing_ip.split(';')) if existing_ip else set()
-                    ips.add(ip_address)
-                    input_area.fill(';'.join(filter(None, ips)))
-                
-                confirm_btn.click()
-                time.sleep(1)
-                logger.info(f"应用可信IP配置成功: {ip_address}")
+                # 遍历应用更新IP
+                for url in WECHAT_URLS:
+                    if not url.strip(): continue
+                    logger.info(f"正在配置应用IP...")
+                    page.goto(url)
+                    
+                    # 这里根据MP原版插件逻辑，点击修改并输入IP
+                    page.wait_for_selector('div.app_card_operate.js_show_ipConfig_dialog')
+                    page.locator('div.app_card_operate.js_show_ipConfig_dialog').click()
+                    page.wait_for_selector('textarea.js_ipConfig_textarea')
+                    
+                    input_area = page.locator('textarea.js_ipConfig_textarea')
+                    confirm_btn = page.locator('.js_ipConfig_confirmBtn')
+                    
+                    existing_ip = input_area.input_value()
+                    if OVERWRITE:
+                        input_area.fill(ip_address)
+                    else:
+                        # 去重并添加
+                        ips = set(existing_ip.split(';')) if existing_ip else set()
+                        ips.add(ip_address)
+                        input_area.fill(';'.join(filter(None, ips)))
+                    
+                    confirm_btn.click()
+                    time.sleep(1)
+                    logger.info(f"应用可信IP配置成功: {ip_address}")
             
             browser.close()
     except Exception as e:
         logger.error(f"更新IP失败: {e}")
+
+    # 将重新登录的动作移到 with sync_playwright() 外部执行，避免嵌套冲突
+    if need_relogin:
+        logger.info("触发重新登录流程...")
+        do_login_and_save_cookie()
 
 def check_task():
     if not WECHAT_URLS or WECHAT_URLS[0] == "":
@@ -232,7 +237,7 @@ def refresh_qr_api():
     if os.path.exists(QR_PATH):
         os.remove(QR_PATH)
         
-    # 修复：明确指定上海时区，避免 8 小时 UTC 偏差导致任务被抛弃
+    # 明确指定上海时区，避免 8 小时 UTC 偏差导致任务被抛弃
     scheduler.add_job(
         func=do_login_and_save_cookie, 
         trigger='date', 
@@ -253,7 +258,7 @@ if __name__ == "__main__":
     scheduler.add_job(func=check_task, trigger=CronTrigger.from_crontab(CHECK_CRON), name="IP_Checker")
     scheduler.start()
 
-    # 修复：明确指定上海时区，马上异步触发一次检查
+    # 明确指定上海时区，马上异步触发一次检查
     scheduler.add_job(
         func=check_task, 
         trigger='date', 
