@@ -28,10 +28,14 @@ QR_PATH = os.path.join(DATA_DIR, "qr.png")
 GLOBAL_STATE = {
     "status": "初始化中",
     "need_login": True,
-    "current_ip": "192.168.1.1"
+    "current_ip": "192.168.1.1",
+    "is_fetching": False  # 新增：防止频繁点击获取二维码导致浏览器多开
 }
 
 app = Flask(__name__)
+
+# 将调度器实例提升到全局
+scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 
 # ================= 核心工具函数 =================
 def load_cookies():
@@ -63,8 +67,14 @@ def get_public_ip():
 
 # ================= 自动化控制逻辑 =================
 def do_login_and_save_cookie():
+    if GLOBAL_STATE.get("is_fetching"):
+        logger.info("已有获取二维码任务正在运行，跳过...")
+        return
+
+    GLOBAL_STATE["is_fetching"] = True
     GLOBAL_STATE["status"] = "正在获取登录二维码"
     GLOBAL_STATE["need_login"] = True
+    
     if os.path.exists(QR_PATH):
         os.remove(QR_PATH)
 
@@ -105,6 +115,9 @@ def do_login_and_save_cookie():
     except Exception as e:
         logger.error(f"登录流程出错: {e}")
         GLOBAL_STATE["status"] = f"启动浏览器失败: {e}"
+    finally:
+        # 无论成功或失败，都解除获取状态，释放锁
+        GLOBAL_STATE["is_fetching"] = False
 
 def update_wechat_ip(ip_address):
     cookies = load_cookies()
@@ -196,6 +209,7 @@ def index():
         need_login=GLOBAL_STATE["need_login"],
         current_ip=GLOBAL_STATE["current_ip"],
         qr_exists=os.path.exists(QR_PATH),
+        is_fetching=GLOBAL_STATE.get("is_fetching", False),
         time=int(time.time())
     )
 
@@ -205,6 +219,23 @@ def serve_qr():
         return send_from_directory(DATA_DIR, 'qr.png')
     return "QR not found", 404
 
+# 新增手动强制刷新接口
+@app.route('/refresh_qr_api')
+def refresh_qr_api():
+    if not GLOBAL_STATE["need_login"]:
+        return {"status": "success", "msg": "当前Cookie有效，无需刷新！"}
+    
+    if GLOBAL_STATE.get("is_fetching"):
+        return {"status": "info", "msg": "后台正在努力获取中..."}
+
+    if os.path.exists(QR_PATH):
+        os.remove(QR_PATH)
+        
+    # 异步触发获取任务
+    scheduler.add_job(func=do_login_and_save_cookie, trigger='date', run_date=datetime.now())
+    return {"status": "success", "msg": "已触发重新获取"}
+
+
 if __name__ == "__main__":
     # 启动时先做一次初步校验
     if not load_cookies():
@@ -213,8 +244,7 @@ if __name__ == "__main__":
         GLOBAL_STATE["need_login"] = False
         GLOBAL_STATE["status"] = "正常运行中"
 
-    # 启动定时任务
-    scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+    # 启动定时任务 (这里的 scheduler 已经在顶部初始化了)
     scheduler.add_job(func=check_task, trigger=CronTrigger.from_crontab(CHECK_CRON), name="IP_Checker")
     scheduler.start()
 
