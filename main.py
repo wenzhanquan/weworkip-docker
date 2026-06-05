@@ -4,7 +4,7 @@ import time
 import re
 import logging
 from datetime import datetime
-import pytz  # 用于解决容器默认 UTC 时区导致的定时任务报错
+import pytz
 from urllib.parse import urljoin
 import requests
 from flask import Flask, render_template, send_from_directory
@@ -30,12 +30,12 @@ GLOBAL_STATE = {
     "status": "初始化中",
     "need_login": True,
     "current_ip": "192.168.1.1",
-    "is_fetching": False  # 防止频繁点击获取二维码导致浏览器多开
+    "is_fetching": False  # 防止并发触发获取二维码
 }
 
 app = Flask(__name__)
 
-# 将调度器实例提升到全局
+# 提升调度器到全局
 scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 
 # ================= 核心工具函数 =================
@@ -76,8 +76,12 @@ def do_login_and_save_cookie():
     GLOBAL_STATE["status"] = "正在获取登录二维码"
     GLOBAL_STATE["need_login"] = True
     
+    # 容错：安全清理旧二维码
     if os.path.exists(QR_PATH):
-        os.remove(QR_PATH)
+        try:
+            os.remove(QR_PATH)
+        except Exception as e:
+            logger.warning(f"清理旧二维码失败 (可忽略): {e}")
 
     try:
         with sync_playwright() as p:
@@ -101,23 +105,23 @@ def do_login_and_save_cookie():
                 logger.info("二维码已保存，请前往Web页面扫码")
                 GLOBAL_STATE["status"] = "请扫码登录"
             
-            # 等待扫码完成跳转
+            # 等待扫码完成跳转 (120秒超时)
             try:
-                page.wait_for_url("**/frame**", timeout=120000) # 等待最多2分钟供用户扫码
+                page.wait_for_url("**/frame**", timeout=120000)
                 logger.info("登录成功！")
                 save_cookies(context.cookies())
                 GLOBAL_STATE["need_login"] = False
                 GLOBAL_STATE["status"] = "正常运行中"
             except Exception as e:
-                logger.error(f"扫码超时或失败: {e}")
-                GLOBAL_STATE["status"] = "登录超时，请刷新重试"
+                logger.error(f"扫码超时或失败: 用户未在2分钟内扫码。")
+                GLOBAL_STATE["status"] = "登录超时，请手动刷新重试"
             
             browser.close()
     except Exception as e:
         logger.error(f"登录流程出错: {e}")
         GLOBAL_STATE["status"] = f"启动浏览器失败: {e}"
     finally:
-        # 无论成功或失败，都解除获取状态，释放锁
+        # 无论成功、失败或超时，必须释放锁
         GLOBAL_STATE["is_fetching"] = False
 
 def update_wechat_ip(ip_address):
@@ -127,7 +131,7 @@ def update_wechat_ip(ip_address):
         do_login_and_save_cookie()
         return
 
-    need_relogin = False  # 用标志位记录是否需要重新登录，避免嵌套 Playwright 崩溃
+    need_relogin = False  # 标志位，避免Playwright嵌套报错
 
     try:
         with sync_playwright() as p:
@@ -141,7 +145,7 @@ def update_wechat_ip(ip_address):
             time.sleep(2)
             if page.locator('.login_stage_title_text').is_visible():
                 logger.info("检测到 Cookie 失效...")
-                need_relogin = True  # 标记为需要重新登录
+                need_relogin = True
             else:
                 GLOBAL_STATE["need_login"] = False
                 GLOBAL_STATE["status"] = "正常运行中"
@@ -152,7 +156,6 @@ def update_wechat_ip(ip_address):
                     logger.info(f"正在配置应用IP...")
                     page.goto(url)
                     
-                    # 这里根据MP原版插件逻辑，点击修改并输入IP
                     page.wait_for_selector('div.app_card_operate.js_show_ipConfig_dialog')
                     page.locator('div.app_card_operate.js_show_ipConfig_dialog').click()
                     page.wait_for_selector('textarea.js_ipConfig_textarea')
@@ -164,7 +167,6 @@ def update_wechat_ip(ip_address):
                     if OVERWRITE:
                         input_area.fill(ip_address)
                     else:
-                        # 去重并添加
                         ips = set(existing_ip.split(';')) if existing_ip else set()
                         ips.add(ip_address)
                         input_area.fill(';'.join(filter(None, ips)))
@@ -177,7 +179,7 @@ def update_wechat_ip(ip_address):
     except Exception as e:
         logger.error(f"更新IP失败: {e}")
 
-    # 将重新登录的动作移到 with sync_playwright() 外部执行，避免嵌套冲突
+    # 如果Cookie失效，退出当前Playwright后再启动登录，解决嵌套崩溃问题
     if need_relogin:
         logger.info("触发重新登录流程...")
         do_login_and_save_cookie()
@@ -200,9 +202,6 @@ def check_task():
             logger.info("检测到IP变化，准备同步到企业微信...")
             GLOBAL_STATE["current_ip"] = current_ip
             update_wechat_ip(current_ip)
-        else:
-            # 即使IP没变，也可以定期验证一下Cookie保活
-            pass
     else:
         logger.error("获取公网IP失败")
 
@@ -225,7 +224,6 @@ def serve_qr():
         return send_from_directory(DATA_DIR, 'qr.png')
     return "QR not found", 404
 
-# 新增手动强制刷新接口
 @app.route('/refresh_qr_api')
 def refresh_qr_api():
     if not GLOBAL_STATE["need_login"]:
@@ -234,10 +232,14 @@ def refresh_qr_api():
     if GLOBAL_STATE.get("is_fetching"):
         return {"status": "info", "msg": "后台正在努力获取中..."}
 
+    # 容错清理旧图
     if os.path.exists(QR_PATH):
-        os.remove(QR_PATH)
+        try:
+            os.remove(QR_PATH)
+        except Exception:
+            pass
         
-    # 明确指定上海时区，避免 8 小时 UTC 偏差导致任务被抛弃
+    # 明确指定上海时区，避免定时任务丢失警告
     scheduler.add_job(
         func=do_login_and_save_cookie, 
         trigger='date', 
@@ -247,23 +249,19 @@ def refresh_qr_api():
 
 
 if __name__ == "__main__":
-    # 启动时先做一次初步校验
     if not load_cookies():
         GLOBAL_STATE["need_login"] = True
     else:
         GLOBAL_STATE["need_login"] = False
         GLOBAL_STATE["status"] = "正常运行中"
 
-    # 启动定时任务 (这里的 scheduler 已经在顶部初始化了)
     scheduler.add_job(func=check_task, trigger=CronTrigger.from_crontab(CHECK_CRON), name="IP_Checker")
     scheduler.start()
 
-    # 明确指定上海时区，马上异步触发一次检查
     scheduler.add_job(
         func=check_task, 
         trigger='date', 
         run_date=datetime.now(pytz.timezone("Asia/Shanghai"))
     )
 
-    # 启动Web服务器
     app.run(host='0.0.0.0', port=8080)
