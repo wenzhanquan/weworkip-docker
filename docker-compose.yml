@@ -1,14 +1,16 @@
 version: '3'
 services:
   weworkip:
-    image: your-dockerhub-username/weworkip:latest # 这里后续换成你的镜像名
+    image: wenzhanquan/weworkip:latest 
     container_name: weworkip
     restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
-      - WECHAT_URLS=https://work.weixin.qq.com/wework_admin/frame#/apps/modApiApp/00000000000,第二个应用地址如果需要
+      - WECHAT_URLS=https://work.weixin.qq.com/wework_admin/frame#/apps/modApiApp/00000000000
       - CHECK_CRON=*/11 * * * *
       - OVERWRITE=True
+      # 👇 新增：在这里填入你的 PushPlus Token
+      - PUSHPLUS_TOKEN=此处替换为你的Token
     volumes:
-      - ./data:/app/data   # 最重要的一步：持久化Cookie
+      - ./data:/app/data
