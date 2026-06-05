@@ -156,8 +156,12 @@ def do_login_and_save_cookie():
                 send_pushplus("✅ 企微助手：接管成功", success_content)
                 
             except Exception:
-                logger.error("用户未在 2 分钟内扫码，流程结束。")
-                GLOBAL_STATE["status"] = "登录超时，请手动刷新或注入Cookie"
+                # 💡 核心修复 1：如果这时候 need_login 已经是 False 了（说明被手动 Cookie 截胡了），就不要去乱覆盖状态！
+                if GLOBAL_STATE["need_login"]:
+                    logger.error("用户未在 2 分钟内扫码，流程结束。")
+                    GLOBAL_STATE["status"] = "登录超时，请手动刷新或注入Cookie"
+                else:
+                    logger.info("扫码倒计时取消：系统已被手动注入的 Cookie 成功接管！")
             
             browser.close()
     except Exception as e:
@@ -196,7 +200,6 @@ def update_wechat_ip(ip_address):
                     logger.info("正在配置应用IP...")
                     page.goto(url)
                     
-                    # ⚠️就是下面这行代码在你那边被截断了，请确保复制完整⚠️
                     page.wait_for_selector('div.app_card_operate.js_show_ipConfig_dialog')
                     page.locator('div.app_card_operate.js_show_ipConfig_dialog').click()
                     page.wait_for_selector('textarea.js_ipConfig_textarea')
@@ -241,8 +244,9 @@ def check_task():
     current_ip = get_public_ip()
     if current_ip:
         logger.info(f"当前公网IP: {current_ip}")
-        if current_ip != GLOBAL_STATE["current_ip"]:
-            logger.info("检测到IP变化，准备同步...")
+        # 💡 核心修复 2：只要状态不是“正常运行中”（比如刚注入了Cookie），哪怕IP没变，也要强制去企微后台跑一遍以验证Cookie！
+        if current_ip != GLOBAL_STATE["current_ip"] or GLOBAL_STATE["status"] != "正常运行中":
+            logger.info("准备同步配置或验证最新 Cookie...")
             GLOBAL_STATE["current_ip"] = current_ip
             update_wechat_ip(current_ip)
     else:
@@ -271,6 +275,7 @@ def serve_qr():
 def refresh_qr_api():
     if load_cookies():
         GLOBAL_STATE["need_login"] = False
+        GLOBAL_STATE["status"] = "正在验证手动注入的 Cookie..."
         scheduler.add_job(func=check_task, trigger='date', run_date=datetime.now(pytz.timezone("Asia/Shanghai")))
         return {"status": "success", "msg": "已识别到手动注入的 Cookie，正在验证..."}
 
