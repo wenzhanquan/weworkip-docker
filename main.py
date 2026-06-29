@@ -7,6 +7,7 @@ from datetime import datetime
 import pytz
 from urllib.parse import urljoin
 import requests
+import threading
 from flask import Flask, render_template, send_from_directory
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -30,11 +31,15 @@ GLOBAL_STATE = {
     "need_login": True,
     "current_ip": "192.168.1.1",
     "is_fetching": False,   # 获取二维码的锁
-    "is_validating": False  # 验证Cookie的锁（防并发多开）
+    "is_validating": False  # 验证Cookie的锁
 }
 
 app = Flask(__name__)
 scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+
+# 引入线程锁，确保线程安全
+validating_lock = threading.Lock()
+fetching_lock = threading.Lock()
 
 # ================= PushPlus 推送模块 =================
 def send_pushplus(title, content):
@@ -109,7 +114,8 @@ def get_public_ip():
 
 # ================= 自动化控制逻辑 =================
 def do_login_and_save_cookie():
-    if GLOBAL_STATE.get("is_fetching"):
+    if not fetching_lock.acquire(blocking=False):
+        logger.info("已有获取二维码的任务在运行，跳过...")
         return
 
     GLOBAL_STATE["is_fetching"] = True
@@ -145,20 +151,19 @@ def do_login_and_save_cookie():
                 qr_content = f"### 🚨 企微助手状态异常\n\n**当前状态**：等待扫码 ⏳\n**触发时间**：{now_time}\n\n---\n**Cookie 已失效**，系统已提取最新二维码。\n👉 **请前往 Web 面板扫码！**\n\n💡 若遇滑块拦截，请手动注入原生 Cookie。"
                 send_pushplus("⚠️ 企微助手：请扫码登录", qr_content)
             
-            # 💡核心修复 1：将死等 120s 替换为 1秒轮询，完美解决时序幽灵锁
             wait_time = 0
             success = False
             while wait_time < 120:
-                # 随时检查是否被外部手动 Cookie 接管
                 if not GLOBAL_STATE["need_login"]:
                     logger.info("检测到登录状态已被接管，主动取消二维码等待！")
                     break
                 
-                if "frame" in page.url:
+                # 💡 核心修复：防止重定向参数干扰，只要 URL 里彻底没有 login 且没有滑块验证码关键词 vcpage，才判定为登录跳转成功
+                if "login" not in page.url and "vcpage" not in page.url:
                     success = True
                     break
                     
-                page.wait_for_timeout(1000) # Playwright 推荐的异步安全等待
+                page.wait_for_timeout(1000) 
                 wait_time += 1
             
             if success:
@@ -168,33 +173,36 @@ def do_login_and_save_cookie():
                 GLOBAL_STATE["status"] = "正常运行中"
                 send_pushplus("✅ 企微助手：接管成功", f"### 🎉 企微接管成功\n\n**状态**：正常运行中 🟢\n**时间**：{datetime.now(pytz.timezone('Asia/Shanghai')).strftime('%Y-%m-%d %H:%M:%S')}\n\n---\n系统已成功接管企业微信，继续监控动态 IP。")
             elif GLOBAL_STATE["need_login"]:
-                # 只有在确实没人接管的情况下，才报超时
                 logger.error("用户未在 2 分钟内扫码，流程结束。")
                 GLOBAL_STATE["status"] = "登录超时，请手动刷新或注入Cookie"
+                if os.path.exists(COOKIE_FILE):
+                    try: os.remove(COOKIE_FILE)
+                    except: pass
             
             browser.close()
     except Exception as e:
         logger.error(f"登录流程出错: {e}")
         if GLOBAL_STATE["need_login"]:
-            GLOBAL_STATE["status"] = f"启动浏览器失败: {e}"
+            GLOBAL_STATE["status"] = f"获取二维码异常: {str(e)[:30]}..."
     finally:
         GLOBAL_STATE["is_fetching"] = False
+        fetching_lock.release()
 
 def update_wechat_ip(ip_address):
-    # 💡核心修复 2：增加验证器独立并发锁
-    if GLOBAL_STATE.get("is_validating"):
+    if not validating_lock.acquire(blocking=False):
+        logger.info("当前已有验证任务在运行，跳过...")
         return
         
-    cookies = load_cookies()
-    if not cookies:
-        logger.error("没有 Cookie，准备触发登录流程")
-        do_login_and_save_cookie()
-        return
-
     GLOBAL_STATE["is_validating"] = True
     need_relogin = False
 
     try:
+        cookies = load_cookies()
+        if not cookies:
+            logger.error("没有 Cookie，准备触发登录流程")
+            need_relogin = True
+            return
+
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context()
@@ -202,11 +210,15 @@ def update_wechat_ip(ip_address):
             page = context.new_page()
             
             page.goto(WECHAT_URLS[0], timeout=60000)
-            page.wait_for_timeout(2000) # 给重定向留出时间
+            page.wait_for_timeout(2000) 
             
-            if page.locator('.login_stage_title_text').is_visible() or "login" in page.url:
+            # 💡 核心修复：增强对失效/验证码拦截页面的双重判定 (防止 vcpage 滑块页死锁)
+            if page.locator('.login_stage_title_text').is_visible() or "login" in page.url or "vcpage" in page.url:
                 logger.info("检测到 Cookie 失效 (或验证码拦截)...")
                 need_relogin = True
+                if os.path.exists(COOKIE_FILE):
+                    try: os.remove(COOKIE_FILE)
+                    except: pass
             else:
                 GLOBAL_STATE["need_login"] = False
                 GLOBAL_STATE["status"] = "正常运行中"
@@ -220,19 +232,22 @@ def update_wechat_ip(ip_address):
                         page.goto(url, timeout=60000)
                         
                         page.wait_for_selector('div.app_card_operate.js_show_ipConfig_dialog', timeout=15000)
-                        page.locator('div.app_card_operate.js_show_ipConfig_dialog').click()
+                        page.locator('div.app_card_operate.js_show_ipConfig_dialog').first.click()
                         page.wait_for_selector('textarea.js_ipConfig_textarea', timeout=10000)
                         
-                        input_area = page.locator('textarea.js_ipConfig_textarea')
-                        confirm_btn = page.locator('.js_ipConfig_confirmBtn')
+                        input_area = page.locator('textarea.js_ipConfig_textarea').first
+                        confirm_btn = page.locator('.js_ipConfig_confirmBtn').first
                         
                         existing_ip = input_area.input_value()
                         if OVERWRITE:
                             input_area.fill(ip_address)
                         else:
-                            ips = set(existing_ip.split(';')) if existing_ip else set()
-                            ips.add(ip_address)
-                            input_area.fill(';'.join(filter(None, ips)))
+                            ips = list(filter(None, set(existing_ip.split(';')) if existing_ip else []))
+                            if ip_address not in ips:
+                                ips.append(ip_address)
+                            # 💡 核心修复：追加模式下最多限制保留最新 10 个 IP，防止超出企微字符限制爆仓
+                            ips = ips[-10:] 
+                            input_area.fill(';'.join(ips))
                         
                         confirm_btn.click()
                         page.wait_for_timeout(1000)
@@ -240,20 +255,23 @@ def update_wechat_ip(ip_address):
             browser.close()
     except Exception as e:
         logger.error(f"更新/验证过程出错: {e}")
-        # 如果是因为网络问题报错，不能直接把正常运行状态覆盖掉
-        if GLOBAL_STATE["status"] == "正在验证手动注入的 Cookie...":
-            GLOBAL_STATE["status"] = f"验证异常，请检查网络: {e}"
+        GLOBAL_STATE["status"] = f"运行异常: {str(e)[:30]}..."
+        # 如果报错且疑似由于登录失效引起，允许清空进入重新登录状态
+        if "timeout" in str(e).lower() or "selector" in str(e).lower():
+            need_relogin = True
     finally:
         GLOBAL_STATE["is_validating"] = False
+        validating_lock.release()
 
     if need_relogin:
+        GLOBAL_STATE["current_ip"] = "192.168.1.1" # 验证失败时还原初始 IP，防止状态不一致
         do_login_and_save_cookie()
 
 def check_task():
     if not WECHAT_URLS or WECHAT_URLS[0] == "":
         return
 
-    # 热重载：检测本地新 Cookie
+    # 热重载检测：检测本地新注入的 Cookie
     if GLOBAL_STATE["need_login"] and load_cookies():
         logger.info("检测到本地被手动注入了 Cookie，进入验证流程...")
         GLOBAL_STATE["need_login"] = False
@@ -268,13 +286,16 @@ def check_task():
     
     if current_ip:
         logger.info(f"当前公网IP: {current_ip}")
+        # 💡 核心修复：即使 IP 没变化，只要状态健康也强制进入 update_wechat_ip 去刷新页面，达到主动保活 Cookie 的作用
         if current_ip != GLOBAL_STATE["current_ip"] or GLOBAL_STATE["status"] != "正常运行中":
             logger.info("准备同步配置或验证最新 Cookie...")
             GLOBAL_STATE["current_ip"] = current_ip
             update_wechat_ip(current_ip)
+        else:
+            logger.info("IP 未发生变化，强制执行一次企微后台访问以监控保活和检验 Cookie...")
+            update_wechat_ip(current_ip)
     else:
         logger.error("获取公网IP失败")
-        # 💡核心修复 3：即使没拿到 IP，只要你需要验证Cookie，我也强制去跑一遍校验
         if GLOBAL_STATE["status"] != "正常运行中":
             logger.info("无IP但需要验证Cookie，强制启动校验...")
             update_wechat_ip(None)
@@ -324,19 +345,24 @@ def refresh_qr_api():
     return {"status": "success", "msg": "已触发重新获取"}
 
 if __name__ == "__main__":
+    # 💡 核心修复：异常重启后，先给一个不确定状态，强制清除 current_ip，逼迫初始化时走一次真实验证
     if not load_cookies():
         GLOBAL_STATE["need_login"] = True
+        GLOBAL_STATE["status"] = "未登录，请扫码"
     else:
         GLOBAL_STATE["need_login"] = False
-        GLOBAL_STATE["status"] = "正常运行中"
+        GLOBAL_STATE["status"] = "设备重启，等待首次验证 Cookie..."
+        GLOBAL_STATE["current_ip"] = None  
 
+    # 💡 核心修复：先在主线程安全地同步跑完第一次检测判定，建立正确的 GLOBAL_STATE
+    try:
+        logger.info("系统启动，正在执行首次同步网络检测...")
+        check_task()
+    except Exception as init_err:
+        logger.error(f"首次初始化检测失败（网络未完全就绪）: {init_err}")
+
+    # 主线程跑完后，再稳妥地启动定时调度和 Flask
     scheduler.add_job(func=check_task, trigger=CronTrigger.from_crontab(CHECK_CRON), name="IP_Checker")
     scheduler.start()
-
-    scheduler.add_job(
-        func=check_task, 
-        trigger='date', 
-        run_date=datetime.now(pytz.timezone("Asia/Shanghai"))
-    )
 
     app.run(host='0.0.0.0', port=8080)
