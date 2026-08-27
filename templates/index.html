@@ -6,13 +6,23 @@
     <title>企业微信动态IP配置助手</title>
     <style>
         body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f4f4f9; }
-        .card { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: inline-block; max-width: 500px; width: 100%; }
-        h1 { color: #333; }
+        .card { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: inline-block; max-width: 500px; width: 100%; box-sizing: border-box; }
+        h1 { color: #333; font-size: 24px; }
         .status { margin: 20px 0; font-size: 1.2em; font-weight: bold; }
         .status.online { color: #28a745; }
         .status.offline { color: #dc3545; }
         img { max-width: 100%; border-radius: 8px; margin-top: 20px; }
         .info { color: #666; font-size: 0.9em; margin-top: 20px; }
+        
+        /* 新增 Cookie 表单样式 */
+        .cookie-section { margin-top: 30px; text-align: left; border-top: 1px solid #eee; padding-top: 20px; }
+        .cookie-section h3 { font-size: 16px; color: #444; margin-bottom: 5px; }
+        .cookie-section p { font-size: 13px; color: #666; margin-bottom: 10px; }
+        .cookie-textarea { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #ccc; border-radius: 5px; resize: vertical; font-family: monospace; font-size: 12px; }
+        .submit-btn { margin-top: 10px; padding: 10px 20px; font-size: 14px; cursor: pointer; border: none; border-radius: 5px; background: #007bff; color: white; width: 100%; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background 0.3s; }
+        .submit-btn:hover { background: #0056b3; }
+        .refresh-btn { margin-top: 10px; padding: 10px 20px; font-size: 14px; cursor: pointer; border: 1px solid #ccc; border-radius: 5px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background 0.3s; }
+        .refresh-btn:hover { background: #f8f9fa; }
     </style>
 </head>
 <body>
@@ -29,7 +39,7 @@
             {% if qr_exists %}
                 <img src="/qr.png?t={{ time }}" alt="扫码登录" style="display:block; margin: 20px auto;">
                 <p style="color: #28a745; font-size: 0.9em; margin-top: -10px; margin-bottom: 15px;">↑ 请扫描上方最新二维码 ↑</p>
-                <button onclick="forceRefresh(event)" style="margin-top: 10px; padding: 10px 20px; font-size: 14px; cursor: pointer; border: 1px solid #ccc; border-radius: 5px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <button onclick="forceRefresh(event)" class="refresh-btn">
                     🔄 二维码没反应或过期？点击强制刷新
                 </button>
             {% elif is_fetching %}
@@ -38,7 +48,7 @@
                     <p style="color: #666; font-size: 0.9em;">请等待 5-10 秒后，手动刷新本网页。</p>
                 </div>
             {% else %}
-                <button onclick="forceRefresh(event)" style="margin-top: 10px; padding: 10px 20px; font-size: 14px; cursor: pointer; border: 1px solid #ccc; border-radius: 5px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <button onclick="forceRefresh(event)" class="refresh-btn">
                     获取二维码
                 </button>
             {% endif %}
@@ -57,6 +67,16 @@
             </script>
         {% endif %}
         
+        <!-- 手动注入 Cookie 区域 -->
+        <div class="cookie-section">
+            <h3>手动注入 Cookie</h3>
+            <p>遇到滑块拦截或频繁扫码失败时，可抓取网页端 Cookie 在此注入：</p>
+            <form action="/update_cookie" method="POST">
+                <textarea name="cookie_data" rows="4" class="cookie-textarea" placeholder="在此粘贴完整的 Cookie 字符串... (例如: wwrtx.vst=xxx; wwrtx.d2st=xxx; ...)"></textarea>
+                <button type="submit" class="submit-btn">保存并验证 Cookie</button>
+            </form>
+        </div>
+
         <div class="info">后台每隔一定时间自动检查IP并更新。</div>
     </div>
 </body>
