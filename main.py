@@ -8,7 +8,7 @@ import pytz
 from urllib.parse import urljoin
 import requests
 import threading
-from flask import Flask, render_template, send_from_directory
+from flask import Flask, render_template, send_from_directory, request, redirect
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from playwright.sync_api import sync_playwright
@@ -25,6 +25,20 @@ PUSHPLUS_TOKEN = os.environ.get("PUSHPLUS_TOKEN", "").strip()
 DATA_DIR = "/app/data"
 COOKIE_FILE = os.path.join(DATA_DIR, "cookies.json")
 QR_PATH = os.path.join(DATA_DIR, "qr.png")
+
+# 💡 核心修复：启动时自动确保目录和文件存在，防止 Docker 挂载时误创文件夹
+os.makedirs(DATA_DIR, exist_ok=True)
+if not os.path.exists(COOKIE_FILE) or os.path.isdir(COOKIE_FILE):
+    try:
+        # 如果是个误创的目录（Docker 挂载常见问题），可以尝试记录日志
+        if os.path.isdir(COOKIE_FILE):
+            logger.error(f"{COOKIE_FILE} 是一个目录！请检查 fnOS 或宿主机上的 volume 映射配置，建议直接映射整个 data 目录而不是单文件。")
+        else:
+            with open(COOKIE_FILE, 'w', encoding='utf-8') as f:
+                f.write('')
+    except Exception as e:
+        logger.error(f"初始化 Cookie 文件失败: {e}")
+
 
 GLOBAL_STATE = {
     "status": "初始化中",
@@ -63,7 +77,7 @@ def send_pushplus(title, content):
 
 # ================= 智能 Cookie 模块 =================
 def load_cookies():
-    if os.path.exists(COOKIE_FILE):
+    if os.path.exists(COOKIE_FILE) and os.path.isfile(COOKIE_FILE):
         try:
             with open(COOKIE_FILE, "r", encoding="utf-8") as f:
                 content = f.read().strip()
@@ -122,7 +136,7 @@ def do_login_and_save_cookie():
     GLOBAL_STATE["status"] = "正在获取登录二维码"
     GLOBAL_STATE["need_login"] = True
     
-    if os.path.exists(QR_PATH):
+    if os.path.exists(QR_PATH) and os.path.isfile(QR_PATH):
         try: os.remove(QR_PATH)
         except: pass
 
@@ -175,7 +189,7 @@ def do_login_and_save_cookie():
             elif GLOBAL_STATE["need_login"]:
                 logger.error("用户未在 2 分钟内扫码，流程结束。")
                 GLOBAL_STATE["status"] = "登录超时，请手动刷新或注入Cookie"
-                if os.path.exists(COOKIE_FILE):
+                if os.path.exists(COOKIE_FILE) and os.path.isfile(COOKIE_FILE):
                     try: os.remove(COOKIE_FILE)
                     except: pass
             
@@ -216,7 +230,7 @@ def update_wechat_ip(ip_address):
             if page.locator('.login_stage_title_text').is_visible() or "login" in page.url or "vcpage" in page.url:
                 logger.info("检测到 Cookie 失效 (或验证码拦截)...")
                 need_relogin = True
-                if os.path.exists(COOKIE_FILE):
+                if os.path.exists(COOKIE_FILE) and os.path.isfile(COOKIE_FILE):
                     try: os.remove(COOKIE_FILE)
                     except: pass
             else:
@@ -308,14 +322,45 @@ def index():
         status=GLOBAL_STATE["status"],
         need_login=GLOBAL_STATE["need_login"],
         current_ip=GLOBAL_STATE["current_ip"],
-        qr_exists=os.path.exists(QR_PATH),
+        qr_exists=os.path.exists(QR_PATH) and os.path.isfile(QR_PATH),
         is_fetching=GLOBAL_STATE.get("is_fetching", False),
         time=int(time.time())
     )
 
+# 💡 新增功能：处理网页提交的手动 Cookie
+@app.route('/update_cookie', methods=['POST'])
+def update_cookie():
+    cookie_data = request.form.get('cookie_data', '')
+    if cookie_data.strip():
+        try:
+            # 写入原始字符串，依靠 load_cookies 函数强大的自动转换机制转成 Playwright 格式
+            with open(COOKIE_FILE, 'w', encoding='utf-8') as f:
+                f.write(cookie_data.strip())
+            
+            logger.info("收到来自网页提交的手动 Cookie。")
+            
+            # 主动改变全局状态并触发后台验证
+            GLOBAL_STATE["need_login"] = False
+            GLOBAL_STATE["status"] = "已接收注入的 Cookie，正在后台验证..."
+            
+            # 如果当前没有在验证中，可以考虑立刻触发一波检查
+            scheduler.add_job(
+                func=check_task, 
+                trigger='date', 
+                run_date=datetime.now(pytz.timezone("Asia/Shanghai"))
+            )
+            
+            # 返回并重定向回首页，带上一个时间戳参数强制刷新
+            return redirect(f'/?t={int(time.time())}')
+        except Exception as e:
+            logger.error(f"写入手动 Cookie 发生错误: {e}")
+            return f"保存 Cookie 时发生错误: {str(e)} <br><a href='/'>点击返回</a>", 500
+    else:
+        return "提交的 Cookie 不能为空！<br><a href='/'>点击返回</a>", 400
+
 @app.route('/qr.png')
 def serve_qr():
-    if os.path.exists(QR_PATH):
+    if os.path.exists(QR_PATH) and os.path.isfile(QR_PATH):
         return send_from_directory(DATA_DIR, 'qr.png')
     return "QR not found", 404
 
@@ -333,7 +378,7 @@ def refresh_qr_api():
     if GLOBAL_STATE.get("is_fetching"):
         return {"status": "info", "msg": "后台正在努力获取二维码中..."}
 
-    if os.path.exists(QR_PATH):
+    if os.path.exists(QR_PATH) and os.path.isfile(QR_PATH):
         try: os.remove(QR_PATH)
         except: pass
         
