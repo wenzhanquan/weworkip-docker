@@ -14,7 +14,6 @@
         img { max-width: 100%; border-radius: 8px; margin-top: 20px; }
         .info { color: #666; font-size: 0.9em; margin-top: 20px; }
         
-        /* 新增 Cookie 表单样式 */
         .cookie-section { margin-top: 30px; text-align: left; border-top: 1px solid #eee; padding-top: 20px; }
         .cookie-section h3 { font-size: 16px; color: #444; margin-bottom: 5px; }
         .cookie-section p { font-size: 13px; color: #666; margin-bottom: 10px; }
@@ -32,6 +31,11 @@
             当前状态: {{ status }}
         </div>
         <p>当前记录的 IP: {{ current_ip }}</p>
+        
+        <!-- 手动立即检测公网 IP 按钮 -->
+        <button onclick="forceCheckIP(event)" class="refresh-btn" style="margin-bottom: 20px; border-color: #007bff; color: #007bff; font-weight: bold;">
+            🌐 立即检测公网 IP 并同步
+        </button>
         
         {% if need_login %}
             <p style="color: #dc3545; font-weight: bold;">Cookie 已失效，请使用企业微信扫码登录</p>
@@ -52,20 +56,29 @@
                     获取二维码
                 </button>
             {% endif %}
-
-            <script>
-            function forceRefresh(event) {
-                event.target.innerText = "正在触发...";
-                event.target.disabled = true;
-                
-                fetch('/refresh_qr_api')
-                    .then(r => r.json())
-                    .then(res => {
-                        location.reload(); 
-                    });
-            }
-            </script>
         {% endif %}
+        
+        <script>
+        function forceCheckIP(event) {
+            event.target.innerText = "正在检测并同步...";
+            event.target.disabled = true;
+            fetch('/check_ip_api')
+                .then(r => r.json())
+                .then(res => {
+                    setTimeout(() => location.reload(), 2000); 
+                });
+        }
+
+        function forceRefresh(event) {
+            event.target.innerText = "正在触发...";
+            event.target.disabled = true;
+            fetch('/refresh_qr_api')
+                .then(r => r.json())
+                .then(res => {
+                    location.reload(); 
+                });
+        }
+        </script>
         
         <!-- 手动注入 Cookie 区域 -->
         <div class="cookie-section">
