@@ -3,7 +3,7 @@ import json
 import time
 import re
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from urllib.parse import urljoin
 import requests
@@ -392,12 +392,14 @@ if __name__ == "__main__":
         GLOBAL_STATE["status"] = "设备重启，等待首次验证 Cookie..."
         GLOBAL_STATE["current_ip"] = None  
 
-    logger.info("系统启动，已将首次网络检测推入后台调度，立刻启动 Web 服务...")
+    logger.info("系统启动，优先启动 Web 服务，首次检测将延迟 5 秒执行...")
     
-    # 异步触发首次检测，释放主线程给 Flask 网页服务
-    scheduler.add_job(func=check_task, trigger='date', run_date=datetime.now(pytz.timezone("Asia/Shanghai")))
+    # 将立刻执行改为延迟 5 秒执行，彻底避开 Flask 启动抢占期
+    delayed_time = datetime.now(pytz.timezone("Asia/Shanghai")) + timedelta(seconds=5)
+    scheduler.add_job(func=check_task, trigger='date', run_date=delayed_time)
     
     scheduler.add_job(func=check_task, trigger=CronTrigger.from_crontab(CHECK_CRON), name="IP_Checker")
     scheduler.start()
 
+    # Flask 会立刻启动并处于空闲状态，确保网页秒开
     app.run(host='0.0.0.0', port=8080)
