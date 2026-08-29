@@ -26,32 +26,29 @@ DATA_DIR = "/app/data"
 COOKIE_FILE = os.path.join(DATA_DIR, "cookies.json")
 QR_PATH = os.path.join(DATA_DIR, "qr.png")
 
-# 💡 核心修复：启动时自动确保目录和文件存在，防止 Docker 挂载时误创文件夹
+# 自动确保目录存在，防止 Docker 挂载单文件时误创文件夹
 os.makedirs(DATA_DIR, exist_ok=True)
 if not os.path.exists(COOKIE_FILE) or os.path.isdir(COOKIE_FILE):
     try:
-        # 如果是个误创的目录（Docker 挂载常见问题），可以尝试记录日志
         if os.path.isdir(COOKIE_FILE):
-            logger.error(f"{COOKIE_FILE} 是一个目录！请检查 fnOS 或宿主机上的 volume 映射配置，建议直接映射整个 data 目录而不是单文件。")
+            logger.error(f"{COOKIE_FILE} 是一个目录！请检查 docker-compose 的 volume 映射配置。")
         else:
             with open(COOKIE_FILE, 'w', encoding='utf-8') as f:
                 f.write('')
     except Exception as e:
         logger.error(f"初始化 Cookie 文件失败: {e}")
 
-
 GLOBAL_STATE = {
     "status": "初始化中",
     "need_login": True,
     "current_ip": "192.168.1.1",
-    "is_fetching": False,   # 获取二维码的锁
-    "is_validating": False  # 验证Cookie的锁
+    "is_fetching": False,   
+    "is_validating": False  
 }
 
 app = Flask(__name__)
 scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 
-# 引入线程锁，确保线程安全
 validating_lock = threading.Lock()
 fetching_lock = threading.Lock()
 
@@ -172,7 +169,6 @@ def do_login_and_save_cookie():
                     logger.info("检测到登录状态已被接管，主动取消二维码等待！")
                     break
                 
-                # 💡 核心修复：防止重定向参数干扰，只要 URL 里彻底没有 login 且没有滑块验证码关键词 vcpage，才判定为登录跳转成功
                 if "login" not in page.url and "vcpage" not in page.url:
                     success = True
                     break
@@ -226,7 +222,6 @@ def update_wechat_ip(ip_address):
             page.goto(WECHAT_URLS[0], timeout=60000)
             page.wait_for_timeout(2000) 
             
-            # 💡 核心修复：增强对失效/验证码拦截页面的双重判定 (防止 vcpage 滑块页死锁)
             if page.locator('.login_stage_title_text').is_visible() or "login" in page.url or "vcpage" in page.url:
                 logger.info("检测到 Cookie 失效 (或验证码拦截)...")
                 need_relogin = True
@@ -259,7 +254,6 @@ def update_wechat_ip(ip_address):
                             ips = list(filter(None, set(existing_ip.split(';')) if existing_ip else []))
                             if ip_address not in ips:
                                 ips.append(ip_address)
-                            # 💡 核心修复：追加模式下最多限制保留最新 10 个 IP，防止超出企微字符限制爆仓
                             ips = ips[-10:] 
                             input_area.fill(';'.join(ips))
                         
@@ -270,7 +264,6 @@ def update_wechat_ip(ip_address):
     except Exception as e:
         logger.error(f"更新/验证过程出错: {e}")
         GLOBAL_STATE["status"] = f"运行异常: {str(e)[:30]}..."
-        # 如果报错且疑似由于登录失效引起，允许清空进入重新登录状态
         if "timeout" in str(e).lower() or "selector" in str(e).lower():
             need_relogin = True
     finally:
@@ -278,14 +271,13 @@ def update_wechat_ip(ip_address):
         validating_lock.release()
 
     if need_relogin:
-        GLOBAL_STATE["current_ip"] = "192.168.1.1" # 验证失败时还原初始 IP，防止状态不一致
+        GLOBAL_STATE["current_ip"] = "192.168.1.1" 
         do_login_and_save_cookie()
 
 def check_task():
     if not WECHAT_URLS or WECHAT_URLS[0] == "":
         return
 
-    # 热重载检测：检测本地新注入的 Cookie
     if GLOBAL_STATE["need_login"] and load_cookies():
         logger.info("检测到本地被手动注入了 Cookie，进入验证流程...")
         GLOBAL_STATE["need_login"] = False
@@ -300,7 +292,6 @@ def check_task():
     
     if current_ip:
         logger.info(f"当前公网IP: {current_ip}")
-        # 💡 核心修复：即使 IP 没变化，只要状态健康也强制进入 update_wechat_ip 去刷新页面，达到主动保活 Cookie 的作用
         if current_ip != GLOBAL_STATE["current_ip"] or GLOBAL_STATE["status"] != "正常运行中":
             logger.info("准备同步配置或验证最新 Cookie...")
             GLOBAL_STATE["current_ip"] = current_ip
@@ -327,30 +318,23 @@ def index():
         time=int(time.time())
     )
 
-# 💡 新增功能：处理网页提交的手动 Cookie
 @app.route('/update_cookie', methods=['POST'])
 def update_cookie():
     cookie_data = request.form.get('cookie_data', '')
     if cookie_data.strip():
         try:
-            # 写入原始字符串，依靠 load_cookies 函数强大的自动转换机制转成 Playwright 格式
             with open(COOKIE_FILE, 'w', encoding='utf-8') as f:
                 f.write(cookie_data.strip())
             
             logger.info("收到来自网页提交的手动 Cookie。")
-            
-            # 主动改变全局状态并触发后台验证
             GLOBAL_STATE["need_login"] = False
             GLOBAL_STATE["status"] = "已接收注入的 Cookie，正在后台验证..."
             
-            # 如果当前没有在验证中，可以考虑立刻触发一波检查
             scheduler.add_job(
                 func=check_task, 
                 trigger='date', 
                 run_date=datetime.now(pytz.timezone("Asia/Shanghai"))
             )
-            
-            # 返回并重定向回首页，带上一个时间戳参数强制刷新
             return redirect(f'/?t={int(time.time())}')
         except Exception as e:
             logger.error(f"写入手动 Cookie 发生错误: {e}")
@@ -389,8 +373,17 @@ def refresh_qr_api():
     )
     return {"status": "success", "msg": "已触发重新获取"}
 
+@app.route('/check_ip_api')
+def check_ip_api():
+    logger.info("收到网页端发起的立即检测 IP 请求...")
+    scheduler.add_job(
+        func=check_task, 
+        trigger='date', 
+        run_date=datetime.now(pytz.timezone("Asia/Shanghai"))
+    )
+    return {"status": "success", "msg": "已触发后台IP检测"}
+
 if __name__ == "__main__":
-    # 💡 核心修复：异常重启后，先给一个不确定状态，强制清除 current_ip，逼迫初始化时走一次真实验证
     if not load_cookies():
         GLOBAL_STATE["need_login"] = True
         GLOBAL_STATE["status"] = "未登录，请扫码"
@@ -399,14 +392,11 @@ if __name__ == "__main__":
         GLOBAL_STATE["status"] = "设备重启，等待首次验证 Cookie..."
         GLOBAL_STATE["current_ip"] = None  
 
-    # 💡 核心修复：先在主线程安全地同步跑完第一次检测判定，建立正确的 GLOBAL_STATE
-    try:
-        logger.info("系统启动，正在执行首次同步网络检测...")
-        check_task()
-    except Exception as init_err:
-        logger.error(f"首次初始化检测失败（网络未完全就绪）: {init_err}")
-
-    # 主线程跑完后，再稳妥地启动定时调度和 Flask
+    logger.info("系统启动，已将首次网络检测推入后台调度，立刻启动 Web 服务...")
+    
+    # 异步触发首次检测，释放主线程给 Flask 网页服务
+    scheduler.add_job(func=check_task, trigger='date', run_date=datetime.now(pytz.timezone("Asia/Shanghai")))
+    
     scheduler.add_job(func=check_task, trigger=CronTrigger.from_crontab(CHECK_CRON), name="IP_Checker")
     scheduler.start()
 
