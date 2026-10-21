@@ -409,12 +409,33 @@ def serve_qr():
 @app.route('/update_cookie', methods=['POST'])
 def update_cookie():
     global ABORT_QR_WAIT
-    # 兼容不同表单字段名或 JSON 提交
-    cookie_str = (request.form.get('cookie') or request.form.get('cookie_str') or '').strip()
-    if not cookie_str and request.is_json:
-        cookie_str = (request.json.get('cookie') or '').strip()
-        
+    
+    # 兼容前端所有可能的表单字段命名习惯 (cookie, cookie_str, content, text, data)
+    cookie_str = ""
+    for key in ['cookie', 'cookie_str', 'content', 'text', 'data', 'cookieContent']:
+        val = request.form.get(key, '').strip()
+        if val:
+            cookie_str = val
+            break
+            
+    # 如果表单里没有，尝试从 JSON 请求体中获取
+    if not cookie_str and request.is_json and request.json:
+        for key in ['cookie', 'cookie_str', 'content', 'text', 'data', 'cookieContent']:
+            val = request.json.get(key, '').strip()
+            if val:
+                cookie_str = val
+                break
+                
+    # 如果前端直接把一整串字符串放在表单的第一个参数或者其它地方，做个兜底
+    if not cookie_str and request.form:
+        # 取第一个非空的表单值
+        for k, v in request.form.items():
+            if v and len(v.strip()) > 10: # Cookie 通常很长
+                cookie_str = v.strip()
+                break
+
     logger.info(f"📥 收到网页提交的手动 Cookie 请求 (长度: {len(cookie_str)})")
+    
     if cookie_str:
         cookies = parse_cookie_string(cookie_str)
         if cookies:
@@ -432,6 +453,11 @@ def update_cookie():
                 id="Manual_Cookie_Check",
                 replace_existing=True
             )
+        else:
+            logger.warning("⚠️ 解析出的 Cookie 列表为空，格式可能不正确！")
+    else:
+        logger.warning("⚠️ 提交的 Cookie 内容为空，请检查前端 HTML 模板中的表单 name 属性！")
+        
     return redirect(f'/?t={int(time.time())}')
 
 @app.route('/check_ip_api', methods=['GET', 'POST'])
