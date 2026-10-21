@@ -326,7 +326,7 @@ def sync_or_keepalive(ip_address, only_keep_alive=False):
             
             # 配置完成后再次保存最新 Cookie 和 IP 记录
             save_cookies(context.cookies())
-             old_ip = GLOBAL_STATE["current_ip"]
+            old_ip = GLOBAL_STATE["current_ip"]
             GLOBAL_STATE["current_ip"] = ip_address
             save_last_ip(ip_address)
             
