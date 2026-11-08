@@ -1,0 +1,10 @@
+__pycache__/
+data/
+*.log
+.env
+.env.*
+!.env.example
+*.credential.*
+panel_auth.json
+cookies.json
+backups/

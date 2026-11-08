@@ -1,25 +1,13 @@
-# 使用官方 Playwright 镜像作为基础
 FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
-
-# 设置工作目录
+USER root
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nginx-light x11vnc novnc websockify openbox x11-utils && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-
-# 设置时区为亚洲/上海
-ENV TZ=Asia/Shanghai
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
-
-# 复制依赖并安装
-COPY requirements.txt .
+COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
-
-# 复制全部代码
-COPY . .
-
-# 创建数据存储目录 (用于持久化 cookie 和 二维码)
-RUN mkdir -p /app/data
-
-# 暴露 Web 端口
+COPY main.py security.py remote_login.py sync_engine.py monitoring.py nginx.conf start.sh /app/
+COPY templates /app/templates
+COPY static /app/static
+RUN chmod +x /app/start.sh
+ENV DISPLAY=:99 TZ=Asia/Shanghai
 EXPOSE 8080
-
-# 启动程序
-CMD ["python", "-u", "main.py"]
+CMD ["/bin/bash", "/app/start.sh"]

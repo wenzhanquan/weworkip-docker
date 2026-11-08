@@ -1,113 +1,93 @@
-# 🌐 WeWorkIP-Docker (企业微信应用可信IP自动更新)
+# 企业微信 IP 助手
 
-![Docker Pulls](https://img.shields.io/docker/pulls/wenzhanquan/weworkip)
-![Docker Image Size](https://img.shields.io/docker/image-size/wenzhanquan/weworkip/latest)
-![GitHub License](https://img.shields.io/github/license/wenzhanquan/weworkip-docker)
+<img src="static/favicon.svg" width="48" height="48" alt="企业微信 IP 助手图标">
 
-本仓库提供了一个**独立、轻量、持久化**的企业微信可信 IP 自动更新服务，专为内网穿透和动态公网 IP 环境设计。
+独立运行的企业微信应用可信 IP 更新服务。定时检测公网 IPv4，实际访问企业微信后台验证 Cookie，读取可信 IP；配置不一致时自动更新，并重新读取确认结果。
 
-> **💡 项目背景**
-> 本项目核心逻辑脱胎于 MoviePilot 的同名插件。由于 MP 重启频率较高，经常导致内置插件的企微 Cookie 失效掉线。为了彻底解决这个问题，本项目将核心逻辑剥离，使用 Docker 独立部署，支持 Cookie 本地持久化存储，实现**一次配置，长期稳定运行**。
+## 面板功能
 
----
+- **实际状态**：Cookie 是否有效、最近验证时间、当前公网 IP、后台实际可信 IP、最近读取时间和下次检查时间。
+- **主要运行日志**：带北京时间，最近 200 条记录持久化保存，容器重启后仍可查看。不记录 Cookie 或推送 Token。
+- **三种折叠登录方式**：远程浏览器、主面板二维码、手动注入 Cookie。
+- **安全替换登录态**：获取二维码、取消登录和登录失败均保留现有 Cookie；新登录或新 Cookie 验证成功后才替换。
+- **远程浏览器**：手机可操作完整登录页面及滑块，免去手工导出 Cookie。登录窗口最多等待 10 分钟。
+- **多应用与推送**：支持多个应用地址，以及可选的 PushPlus 通知。
+- **网页图标**：浏览器标签与面板标题使用统一图标，提供 SVG 和多尺寸 ICO。
 
-## ✨ 核心特性
+面板按当前设计不要求访问密码，适合通过内网或 VPN 使用。远程桌面复用面板端口，无需额外映射 VNC 端口。
 
-- **🐳 Docker 原生**：完全解耦，不依赖任何第三方平台，静默运行。
-- **🧠 智能 Cookie 引擎 (New)**：无惧企微变态滑块验证码！支持浏览器 F12 原生 Cookie 字符串“傻瓜式”直接粘贴，自动解析格式化并**热重载**秒生效。
-- **📢 微信消息推送 (New)**：全面接入 PushPlus，Cookie 失效需扫码、接管成功均有精美的 Markdown 微信实时推送告警。
-- **💾 Cookie 持久化**：登录状态保存在本地映射目录，容器重启、升级均不掉线，自带定时巡检机制，大幅延长 Cookie 寿命。
-- **📱 Web 扫码登录**：内置轻量级 Web 面板，提供防死锁的“强制刷新”机制，直接浏览器看图扫码，无需翻看控制台日志。
-- **🔄 多应用支持**：支持同时配置并更新多个企业微信应用的可信 IP。
-- **⚙️ 纯净 Playwright**：内置微软官方 Playwright 环境，高度模拟真实浏览器，降低风控概率。
+## Docker Compose 部署
 
----
+当前构建为 Linux amd64。下载本仓库的 `docker-compose.yml` 和 `.env.example`，将 `.env.example` 复制为 `.env`，填写：
 
-## 🚀 快速部署
-
-我们强烈推荐使用 `docker-compose` 进行部署。
-
-### 1. 创建目录与配置文件
-在你的服务器（如群晖、Linux NAS 等）上创建一个目录，例如 `weworkip`，并在其中创建 `docker-compose.yml` 文件：
-
-```yaml
-version: '3.8'
-
-services:
-  weworkip:
-    image: wenzhanquan/weworkip:latest
-    container_name: weworkip
-    restart: unless-stopped
-    ports:
-      - "8888:8080"  # 8888 可修改为你喜欢的本地端口
-    environment:
-      - TZ=Asia/Shanghai  # 设置时区，确保定时任务时间准确
-      # 必填：企业微信应用的可信IP配置页面地址（多个地址用英文逗号分隔）
-      - WECHAT_URLS=[https://work.weixin.qq.com/wework_admin/frame#/apps/modApiApp/00000000000](https://work.weixin.qq.com/wework_admin/frame#/apps/modApiApp/00000000000)
-      - CHECK_CRON=*/11 * * * * # 检测 IP 变动的频率，默认11分钟
-      - OVERWRITE=True           # True为覆盖原有IP，False为追加IP
-      # 选填：PushPlus 消息推送 Token，填入后开启微信告警
-      - PUSHPLUS_TOKEN=你的PushPlusToken填在这里
-    volumes:
-      # 【重要】将 Cookie 和二维码保存到本地，实现持久化
-      - ./data:/app/data         
+```dotenv
+WECHAT_URLS=https://work.weixin.qq.com/wework_admin/frame#/apps/modApiApp/你的应用ID
+PUSHPLUS_TOKEN=
 ```
 
-### 2. 启动容器
-在 `docker-compose.yml` 所在目录执行以下命令启动容器：
+多个应用地址用英文逗号分隔。PushPlus 不使用时留空。
 
-```bash
-docker-compose up -d
+```sh
+docker compose pull
+docker compose up -d --no-build
 ```
 
----
+打开 `http://服务器地址:9001`。数据保存在当前目录的 `./data`，升级时应保留该目录。
 
-## ⚙️ 环境变量说明
+### 从源码构建
 
-| 变量名 | 必填 | 默认值 | 描述 |
-| :--- | :---: | :--- | :--- |
-| `WECHAT_URLS` | **是** | 无 | 企微应用管理地址。多个应用请用 `,` 分隔。 |
-| `CHECK_CRON` | 否 | `*/11 * * * *` | IP 检测周期。默认每 11 分钟检测一次。 |
-| `OVERWRITE` | 否 | `True` | `True`：新 IP 直接覆盖。<br>`False`：将新 IP 追加到末尾。 |
-| `TZ` | 否 | `Asia/Shanghai` | 容器时区配置，确保定时任务时间准确。 |
-| `PUSHPLUS_TOKEN` | 否 | 无 | [PushPlus](http://www.pushplus.plus/) 官网获取的 Token，用于接收微信通知。 |
+克隆完整仓库并配置 `.env` 后执行：
 
----
+```sh
+docker compose build weworkip
+docker compose up -d --no-build --pull never weworkip
+```
 
-## 🎮 使用指南 (两种接管方式)
+Dockerfile 从微软官方 Playwright 镜像独立构建，不依赖旧版 WeWorkIP 镜像。Python 依赖固定为已验证版本。
 
-容器启动后，在浏览器中访问 `http://<你的服务器IP>:8888` 进入 Web 面板。我们提供两种无感接管方式：
+## 参数
 
-### 方式一：直接扫码登录（常规情况）
-1. 如果是首次运行，或者检测到 Cookie 已经失效，页面上会显示一个**企业微信登录二维码**。
-2. 打开手机企业微信，扫描二维码并确认登录。
-3. 扫码完成后，后台会自动接管流程，Web 页面会显示“**正常运行中**”。
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `WECHAT_URLS` | 空，必填 | 企业微信应用详情地址，多个地址用英文逗号分隔 |
+| `CHECK_CRON` | `*/11 * * * *` | 按小时内第 0、11、22、33、44、55 分钟检查 |
+| `OVERWRITE` | `True` | 为 `True` 时可信 IP 只保留当前公网 IP；为 `False` 时保留原配置并追加 |
+| `PUSHPLUS_TOKEN` | 空 | 可选通知 Token，也兼容 `PUSH_PLUS_TOKEN` |
+| `TZ` | `Asia/Shanghai` | 容器时区；面板事件时间使用北京时间 |
 
-### 方式二：手动注入 Cookie（专治滑块验证码拦截）
-如果遇到企微强制弹出“拖动滑块验证码”导致扫码失败，请使用一键注入绕过：
-1. 用电脑浏览器登录企业微信网页版后台，完成滑块验证。
-2. 按 `F12` 打开开发者工具，在 `Network (网络)` 中找到 `cookie:` 字段，**将冒号后面那一长串英文字符全选复制**。
-3. 打开服务器映射的 `./data/cookies.json` 文件（如果没有则新建），把刚才复制的内容**原封不动地直接粘贴保存**（无需手动排版）。
-4. 回到本程序的 Web 面板，点击 **“🔄 强制刷新”** 按钮。程序会在 1 秒内自动解析字符串并成功接管。
+示例映射为 `9001:8080`，可修改左侧端口。`shm_size: 256m` 用于浏览器共享内存。
 
-> **静默守护**：接管成功后，此后你无需再进行任何操作。程序会按照你设定的频率在后台默默检查 IP 并自动更新到企业微信后台（并兼具自动保活 Cookie 功能）。
+## 登录与验证
 
----
+1. **远程浏览器登录**：展开方式 1，点击按钮，按企业微信页面提示扫码，必要时直接操作滑块。手机建议横屏。
+2. **二维码登录**：展开方式 2 后点击获取二维码；单纯展开不会触发重新登录。二维码过期可结束本次登录后重新获取。
+3. **手动 Cookie**：展开方式 3，粘贴浏览器请求中的完整 Cookie 字符串，或 Playwright Cookie JSON 数组。新 Cookie 先验证，失败时不会覆盖原文件。
 
-## ❓ 常见问题 (FAQ)
+同一部手机能否通过相册识码取决于微信实际支持；不支持时使用另一块屏幕展示二维码。额外验证仍需用户本人完成。
 
-**Q: 容器重启或者更新镜像后，需要重新扫码吗？**
-**A:** 不需要。只要你在 `docker-compose.yml` 中正确映射了 `./data:/app/data`，Cookie 会被永久保存在本地宿主机，容器重建不会丢失登录状态。
+Cookie 文件存在不代表当前有效；首页显示最近一次实际访问后台的结果。网络超时会显示未能确认，不会直接删除 Cookie。可信 IP 保存后会重新访问后台读取，只有值匹配才报告成功。
 
-**Q: 为什么扫码后 Web 页面一直转圈或者报错？**
-**A:** 扫码后后台需要一点时间（通常 5-10 秒）跳转并抓取保存 Cookie。请耐心等待一会，刷新网页即可看到成功状态。如果二维码没反应或过期，可以点击页面上的“强制刷新”重新获取。
+## 更新与回退
 
-**Q: 如果公网 IP 好几个月不变，Cookie 会过期吗？**
-**A:** 我们在代码中加入了主动保活机制。无论公网 IP 是否变化，后台定时任务（默认 11 分钟）都会带着保存的 Cookie 去企微后台逛一圈，这能大幅度延长 Cookie 的存活时间。万一 Cookie 真的死了，程序也能在 11 分钟内迅速发现，并第一时间通过 PushPlus 微信推送通知你。
+更新前备份 `data` 和 Compose 配置。拉取镜像后重建容器不会主动清除已保存的登录态：
 
----
+```sh
+docker compose pull
+docker compose up -d --no-build
+```
 
-## 📜 鸣谢与协议
+GitHub Actions 在 `main` 更新后先构建并运行回归测试，通过后发布 Docker Hub 的 `latest`、`edge` 和对应提交的 `sha-*` 标签。需要固定版本时，在 Compose 中指定相应提交标签。服务本身不执行自动拉取或自动升级。
 
-- 核心交互逻辑灵感来源于 MoviePilot 社区插件 [MoviePilot-Plugins](https://github.com/suraxiuxiu/MoviePilot-Plugins)。
-- 本项目采用 [GPL-3.0 License](./LICENSE) 开源协议。
+## 测试
+
+测试包含真实 Chromium 的登录生命周期、无效 Cookie 保留、可信 IP 保存后回读、任务繁忙恢复和日志持久化。测试使用本地模拟后台，不触碰真实企业微信配置：
+
+```sh
+docker build -t weworkip:test .
+docker run --rm --network none --entrypoint bash \
+  -v "$PWD:/tests:ro" -e PYTHONPATH=/app \
+  -e WECHAT_URLS=https://fixture.invalid/app \
+  weworkip:test -c 'Xvfb :98 -screen 0 1100x820x24 -nolisten tcp >/tmp/xvfb.log 2>&1 & sleep 1; DISPLAY=:98 python -m unittest discover -s /tests -p "test_*.py"'
+```
+
+本项目核心交互逻辑源自 MoviePilot 同名插件，延续原仓库的 GPL-3.0 协议说明。

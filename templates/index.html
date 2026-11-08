@@ -1,96 +1,27 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>企业微信动态IP配置助手</title>
-    <style>
-        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f4f4f9; }
-        .card { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: inline-block; max-width: 500px; width: 100%; box-sizing: border-box; }
-        h1 { color: #333; font-size: 24px; }
-        .status { margin: 20px 0; font-size: 1.2em; font-weight: bold; }
-        .status.online { color: #28a745; }
-        .status.offline { color: #dc3545; }
-        img { max-width: 100%; border-radius: 8px; margin-top: 20px; }
-        .info { color: #666; font-size: 0.9em; margin-top: 20px; }
-        
-        .cookie-section { margin-top: 30px; text-align: left; border-top: 1px solid #eee; padding-top: 20px; }
-        .cookie-section h3 { font-size: 16px; color: #444; margin-bottom: 5px; }
-        .cookie-section p { font-size: 13px; color: #666; margin-bottom: 10px; }
-        .cookie-textarea { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #ccc; border-radius: 5px; resize: vertical; font-family: monospace; font-size: 12px; }
-        .submit-btn { margin-top: 10px; padding: 10px 20px; font-size: 14px; cursor: pointer; border: none; border-radius: 5px; background: #007bff; color: white; width: 100%; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background 0.3s; }
-        .submit-btn:hover { background: #0056b3; }
-        .refresh-btn { margin-top: 10px; padding: 10px 20px; font-size: 14px; cursor: pointer; border: 1px solid #ccc; border-radius: 5px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.1); transition: background 0.3s; }
-        .refresh-btn:hover { background: #f8f9fa; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>企业微信动态IP助手</h1>
-        <div class="status {% if status == '正常运行中' %}online{% else %}offline{% endif %}">
-            当前状态: {{ status }}
-        </div>
-        <p>当前记录的 IP: {{ current_ip }}</p>
-        
-        <!-- 手动立即检测公网 IP 按钮 -->
-        <button onclick="forceCheckIP(event)" class="refresh-btn" style="margin-bottom: 20px; border-color: #007bff; color: #007bff; font-weight: bold;">
-            🌐 立即检测公网 IP 并同步
-        </button>
-        
-        {% if need_login %}
-            <p style="color: #dc3545; font-weight: bold;">Cookie 已失效，请使用企业微信扫码登录</p>
-            
-            {% if qr_exists %}
-                <img src="/qr.png?t={{ time }}" alt="扫码登录" style="display:block; margin: 20px auto;">
-                <p style="color: #28a745; font-size: 0.9em; margin-top: -10px; margin-bottom: 15px;">↑ 请扫描上方最新二维码 ↑</p>
-                <button onclick="forceRefresh(event)" class="refresh-btn">
-                    🔄 二维码没反应或过期？点击强制刷新
-                </button>
-            {% elif is_fetching %}
-                <div style="padding: 20px; background: #e9ecef; border-radius: 8px; margin: 20px 0;">
-                    <p style="color: #0056b3; font-weight: bold;">⏳ 正在后台获取最新二维码...</p>
-                    <p style="color: #666; font-size: 0.9em;">请等待 5-10 秒后，手动刷新本网页。</p>
-                </div>
-            {% else %}
-                <button onclick="forceRefresh(event)" class="refresh-btn">
-                    获取二维码
-                </button>
-            {% endif %}
-        {% endif %}
-        
-        <script>
-        function forceCheckIP(event) {
-            event.target.innerText = "正在检测并同步...";
-            event.target.disabled = true;
-            fetch('/check_ip_api')
-                .then(r => r.json())
-                .then(res => {
-                    setTimeout(() => location.reload(), 2000); 
-                });
-        }
-
-        function forceRefresh(event) {
-            event.target.innerText = "正在触发...";
-            event.target.disabled = true;
-            fetch('/refresh_qr_api')
-                .then(r => r.json())
-                .then(res => {
-                    location.reload(); 
-                });
-        }
-        </script>
-        
-        <!-- 手动注入 Cookie 区域 -->
-        <div class="cookie-section">
-            <h3>手动注入 Cookie</h3>
-            <p>遇到滑块拦截或频繁扫码失败时，可抓取网页端 Cookie 在此注入：</p>
-            <form action="/update_cookie" method="POST">
-                <textarea name="cookie_data" rows="4" class="cookie-textarea" placeholder="在此粘贴完整的 Cookie 字符串... (例如: wwrtx.vst=xxx; wwrtx.d2st=xxx; ...)"></textarea>
-                <button type="submit" class="submit-btn">保存并验证 Cookie</button>
-            </form>
-        </div>
-
-        <div class="info">后台每隔一定时间自动检查IP并更新。</div>
-    </div>
-</body>
-</html>
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>企业微信 IP 助手</title><link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=20261108"><link rel="alternate icon" type="image/vnd.microsoft.icon" href="/favicon.ico?v=20261108">
+<style>
+:root{font-family:"Segoe UI","Microsoft YaHei",sans-serif;color:#1a2a3a;background:#eef2f6;font-size:15px}*{box-sizing:border-box}body{margin:0}main{max-width:1080px;margin:auto;padding:32px 24px 48px}header{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:24px}h1{font-size:25px;letter-spacing:-.5px;margin:0 0 7px}h2{font-size:16px;margin:0}p{line-height:1.65;margin:8px 0}.muted{color:#66788b;font-size:13px}.button,button{display:inline-flex;justify-content:center;align-items:center;text-decoration:none;font:inherit;font-size:14px;cursor:pointer;border:1px solid #c8d3df;border-radius:7px;background:white;color:#29435c;padding:10px 15px;white-space:nowrap}button.primary,.button.primary{background:#156c83;border-color:#156c83;color:white}button:disabled{opacity:.5;cursor:wait}.summary{background:#fff;border:1px solid #d6e0e8;border-radius:10px;padding:22px;margin-bottom:22px}.summary-title{display:flex;align-items:center;gap:9px;margin-bottom:18px;font-size:14px}#activity-dot{width:8px;height:8px;border-radius:50%;background:#8293a4}.observations{display:grid;grid-template-columns:1fr 1fr;gap:20px 32px}.observation .label{color:#66788b;font-size:12px;display:block;margin-bottom:7px}.value{font-size:22px;font-weight:600;line-height:1.3}.value.good{color:#17705b}.value.bad{color:#b44234}.value.wait{color:#936327}.observed-time{font-size:12px;color:#6e7e8f;margin-top:7px}.ip-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 32px;border-top:1px solid #e5ebf1;margin-top:20px;padding-top:18px}.ip-grid p{margin:0}.ip-grid code{font:16px Consolas,monospace;color:#233f59;overflow-wrap:anywhere}.schedule{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid #e5ebf1;margin-top:17px;padding-top:14px;font-size:12px;color:#6e7e8f}#last-error:empty{display:none}#last-error{color:#ae3d32;font-size:13px;margin-top:14px}.log-head{display:flex;justify-content:space-between;align-items:center;margin:0 0 11px}.log-head label{font-size:12px;color:#66788b}.log-shell{background:#152330;border:1px solid #233849;border-radius:9px;overflow:hidden}#logs{list-style:none;margin:0;padding:10px 0;height:360px;overflow:auto;color:#dce7ef;font:13px/1.65 Consolas,"Microsoft YaHei",monospace;scrollbar-color:#446079 #152330}#logs li{display:grid;grid-template-columns:154px 46px 1fr;gap:12px;padding:7px 16px;border-bottom:1px solid #223442}#logs time{color:#829eb5;white-space:nowrap}.log-level{color:#6ab9c8;font-size:11px;padding-top:1px}li.error .log-level{color:#ff9b8d}li.warning .log-level{color:#e4c37a}.log-message{overflow-wrap:anywhere;white-space:pre-wrap}.methods{margin-top:30px}.methods>p{margin-bottom:16px}details{background:#fff;border:1px solid #d6e0e8;border-radius:8px;margin-top:10px}summary{cursor:pointer;padding:17px 18px;font-weight:600;font-size:14px}details[open] summary{border-bottom:1px solid #e5ebf1}.method-body{padding:17px 18px}.method-body p{font-size:13px;color:#63768a}.method-body button,.method-body .button{margin-right:7px;margin-top:6px}textarea{width:100%;padding:12px;resize:vertical;border:1px solid #bdcad7;border-radius:6px;font:12px/1.7 Consolas,monospace;margin:10px 0}#qr{display:block;max-width:240px;width:100%;margin:18px auto}#qr[hidden]{display:none!important}#notice{min-height:20px;color:#176c80;font-size:13px}#connection{font-size:12px;color:#6e7e8f}footer{font-size:12px;color:#728497;margin-top:20px;line-height:1.7}
+@media(max-width:600px){main{padding:22px 14px 32px}header{align-items:flex-start;flex-wrap:wrap;margin-bottom:18px}h1{font-size:22px}header button{width:100%}.summary{padding:18px 16px}.observations{gap:18px}.value{font-size:19px}.ip-grid{grid-template-columns:1fr;gap:14px}#logs{height:340px}#logs li{grid-template-columns:1fr 45px;gap:3px 8px;padding:9px 12px}.log-message{grid-column:1/-1}.method-body .button,.method-body button{width:100%;margin-right:0}.schedule{display:block}.schedule span{display:block;margin-top:5px}}
+</style></head><body><main>
+<header><div><h1 style="display:flex;align-items:center;gap:9px"><img src="/static/favicon.svg" width="29" height="29" alt="">企业微信 IP 助手</h1><div id="connection">正在读取运行状态…</div></div><button class="primary" onclick="action(this,'/check_ip_api')">立即检查并同步</button></header>
+<section class="summary" aria-label="实际检查结果"><div class="summary-title"><span id="activity-dot"></span><span id="status">{{ status }}</span></div>
+<div class="observations"><div class="observation"><span class="label">Cookie 验证结果</span><div id="cookie-state" class="value wait">等待检查</div><div class="observed-time" id="cookie-time">尚未实际验证</div></div><div class="observation"><span class="label">企业微信可信 IP</span><div id="sync-state" class="value wait">等待核对</div><div class="observed-time" id="sync-time">尚未读取后台配置</div></div></div>
+<div class="ip-grid"><p><span class="muted">当前公网 IP</span><br><code id="public-ip">尚未检测</code><br><span class="muted" id="ip-time"></span></p><p><span class="muted">后台实际可信 IP</span><br><code id="trusted-ips">尚未读取</code></p></div><div class="schedule"><span id="next-check">下次检查：等待调度</span><span id="last-attempt">本次尚未检查</span></div><p id="last-error"></p></section>
+<section aria-label="主要运行日志"><div class="log-head"><h2>运行日志</h2><label><input id="follow" type="checkbox" checked> 跟随最新日志</label></div><div class="log-shell"><ol id="logs" role="log" aria-live="off"><li>正在读取带时间戳的运行记录…</li></ol></div><p id="notice" role="status"></p></section>
+<section class="methods"><h2>登录方式</h2><p class="muted">需要重新登录时展开。生成二维码不会删除现有 Cookie；新登录验证成功后才替换。</p>
+<details id="method-remote"><summary>1 · 远程浏览器登录</summary><div class="method-body"><p>打开完整的企业微信登录页面，手机可横屏操作滑块等验证。</p><a class="button primary" href="/remote-login">打开远程浏览器登录</a></div></details>
+<details id="method-qr"><summary>2 · 企业微信二维码登录</summary><div class="method-body"><p id="qr-hint">点击下方按钮生成登录二维码。仅展开此项不会触发重新登录。</p><img id="qr" hidden alt="企业微信登录二维码"><button class="primary" onclick="action(this,'/refresh_qr_api')">获取登录二维码</button><button onclick="action(this,'/cancel_login_api')">结束本次登录</button></div></details>
+<details id="method-cookie"><summary>3 · 手动注入 Cookie</summary><div class="method-body"><p>先验证新 Cookie，只有成功进入企业微信应用后台后才替换原文件。验证失败时保留原 Cookie。</p><form id="cookie-form"><textarea name="cookie" rows="4" required autocomplete="off" placeholder="粘贴完整 Cookie 字符串"></textarea><button class="primary" type="submit">验证并保存新 Cookie</button></form></div></details>
+</section><footer>时间均为北京时间。有效性以最近一次实际访问后台的结果为准；可信 IP 以重新读取的配置为准。保留最近 200 条主要运行记录。</footer></main>
+<script>
+let state=null,logSignature='',polling=false;
+async function request(url,options={}){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);try{const r=await fetch(url,{...options,signal:controller.signal,cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||data.msg||'请求失败：'+r.status);return data}finally{clearTimeout(timer)}}
+async function action(button,url,body){const old=button.textContent;button.disabled=true;button.textContent='正在提交…';try{const data=await request(url,{method:'POST',...(body?{body}: {})});document.querySelector('#notice').textContent=data.msg||'请求已提交';if(url==='/update_cookie')document.querySelector('#cookie-form').reset();await poll()}catch(e){document.querySelector('#notice').textContent=e.name==='AbortError'?'请求超时，请稍后重试':e.message}finally{button.disabled=false;button.textContent=old}}
+function setValue(id,text,tone){const e=document.getElementById(id);e.textContent=text;e.className='value '+tone}
+function render(s){state=s;document.querySelector('#status').textContent=s.status;document.querySelector('#activity-dot').style.background=s.check_active||s.login_active?'#bf903d':s.sync_status==='matched'?'#20816a':'#8293a4';const cookies={valid:['有效','good'],invalid:['已失效','bad'],missing:['尚未保存','wait'],unconfirmed:['本次未能确认','wait'],unknown:['等待实际验证','wait']};setValue('cookie-state',...(cookies[s.cookie_status]||cookies.unknown));const syncing={matched:['已核对一致','good'],checking:['正在核对','wait'],failed:['核对或保存失败','bad'],mismatch:['与公网 IP 不一致','bad'],waiting:['等待有效 Cookie','wait'],unconfirmed:['本次未能确认','wait'],unknown:['等待核对','wait']};setValue('sync-state',...(syncing[s.sync_status]||syncing.unknown));document.querySelector('#cookie-time').textContent=s.cookie_checked_at?'最近验证：'+s.cookie_checked_at:'尚未实际验证；文件存在不代表有效';document.querySelector('#sync-time').textContent=s.sync_checked_at?'最近读取：'+s.sync_checked_at:'尚未读取后台配置';document.querySelector('#public-ip').textContent=s.public_ip||'尚未检测';document.querySelector('#ip-time').textContent=s.ip_checked_at?'检测于 '+s.ip_checked_at:'';document.querySelector('#trusted-ips').textContent=s.apps.length?s.apps.map(a=>(s.apps.length>1?'应用 '+a.app+'：':'')+(a.trusted_ips.join('；')||'未配置')).join(' / '):'尚未读取';document.querySelector('#next-check').textContent='下次检查：'+(s.next_check||'等待调度');document.querySelector('#last-attempt').textContent='最近执行：'+(s.last_check==='尚未检测'?'尚未执行':s.last_check);document.querySelector('#last-error').textContent=s.last_error||'';document.querySelector('#connection').textContent='状态更新于 '+s.server_time;renderQr()}
+function renderQr(){if(!state)return;const qr=document.querySelector('#qr'),open=document.querySelector('#method-qr').open,show=open&&state.qr_exists&&state.login_active;qr.hidden=!show;if(show){qr.src='/qr.png?t='+Date.now();document.querySelector('#qr-hint').textContent='请按登录页面提示扫码；需要滑块时可改用方式 1，当前 Cookie 保留。'}else{qr.removeAttribute('src');document.querySelector('#qr-hint').textContent=state.login_active?'登录窗口已打开，正在等待二维码；如需验证请使用方式 1。':state.login_requested?'正在准备二维码，现有 Cookie 保留。':state.login_status==='success'?'新登录已成功，二维码已收起。':state.login_status==='error'?state.login_message:'尚未开启二维码登录，点击获取后才生成。'}}
+function renderLogs(items){const signature=JSON.stringify(items);if(signature===logSignature)return;logSignature=signature;const box=document.querySelector('#logs'),position=box.scrollTop;box.replaceChildren();if(!items.length){const li=document.createElement('li');li.textContent='暂无运行记录，首次检查后将在这里显示。';box.append(li)}for(const entry of items){const li=document.createElement('li');li.className=entry.level.toLowerCase();const time=document.createElement('time');time.textContent=entry.time;const level=document.createElement('span');level.className='log-level';level.textContent=entry.level;const message=document.createElement('span');message.className='log-message';message.textContent=entry.message;li.append(time,level,message);box.append(li)}box.scrollTop=document.querySelector('#follow').checked?box.scrollHeight:position}
+async function poll(){if(polling)return;polling=true;try{const [s,log]=await Promise.all([request('/status_api'),request('/logs_api')]);render(s);renderLogs(log.logs)}catch(e){document.querySelector('#connection').textContent='连接暂时中断，显示最近一次结果'}finally{polling=false}}
+document.querySelector('#cookie-form').addEventListener('submit',e=>{e.preventDefault();action(e.submitter,'/update_cookie',new FormData(e.target))});document.querySelectorAll('details').forEach(d=>d.addEventListener('toggle',()=>{if(d.open)document.querySelectorAll('details').forEach(other=>{if(other!==d)other.open=false});renderQr()}));document.querySelector('#qr').addEventListener('error',()=>{document.querySelector('#qr').hidden=true;document.querySelector('#qr-hint').textContent='二维码正在刷新，请稍候；现有 Cookie 保留。'});poll();setInterval(poll,3000);
+</script></body></html>

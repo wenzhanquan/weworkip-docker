@@ -1,0 +1,11 @@
+.git
+__pycache__
+test_*.py
+data
+*.md
+.env
+.env.*
+backups
+*.credential.*
+panel_auth.json
+cookies.json

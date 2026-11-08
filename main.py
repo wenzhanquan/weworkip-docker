@@ -81,13 +81,42 @@ def remove_qr_file():
 
 GLOBAL_STATE = {
     "status": "初始化中",
+    "login_active": False,
+    "login_requested": False,
+    "login_status": "idle",
+    "check_active": False,
+    "candidate_pending": False,
+    "cookie_status": "unknown",
+    "cookie_checked_at": None,
+    "cookie_saved_at": None,
+    "public_ip": None,
+    "ip_checked_at": None,
+    "sync_status": "unknown",
+    "sync_checked_at": None,
+    "last_sync_success": None,
+    "apps": [],
+    "last_error": "",
     "need_login": True,
     "current_ip": load_last_ip(),
     "last_check": "尚未检测"
 }
 
+STATE_LOCK = threading.RLock()
+from monitoring import EventLog, timestamp
+EVENTS = EventLog(os.path.join(DATA_DIR, 'events.jsonl'), secrets=[PUSH_PLUS_TOKEN])
+
+def update_state(**changes):
+    with STATE_LOCK:
+        GLOBAL_STATE.update(changes)
+
+def emit_event(level, message):
+    EVENTS.append(level, message)
+    logger.log(getattr(logging, level), message)
+
 app = Flask(__name__)
 scheduler = BackgroundScheduler(timezone=TZ)
+from security import install_security
+install_security(app, DATA_DIR)
 
 # ================= 核心工具函数 =================
 def send_pushplus(title, content):
@@ -153,10 +182,15 @@ def load_cookies():
 
 def save_cookies(cookies):
     try:
-        with open(COOKIE_FILE, "w", encoding="utf-8") as f:
+        temporary = COOKIE_FILE + '.new'
+        with open(temporary, "w", encoding="utf-8") as f:
             json.dump(cookies, f, ensure_ascii=False, indent=2)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, COOKIE_FILE)
+        return True
     except Exception as e:
         logger.error(f"保存 Cookie 失败: {e}")
+        return False
 
 def get_public_ip():
     urls = [
@@ -178,216 +212,63 @@ def get_public_ip():
     return None
 
 # ================= 自动化控制逻辑 =================
+def schedule_check(job_id, **kwargs):
+    scheduler.add_job(func=check_task, kwargs=kwargs, trigger='date',
+        run_date=datetime.now(TZ)+timedelta(seconds=2), id=job_id, replace_existing=True)
+
 def do_login_and_save_cookie():
     global ABORT_QR_WAIT
     ABORT_QR_WAIT = False
-    GLOBAL_STATE["status"] = "正在获取登录二维码..."
-    GLOBAL_STATE["need_login"] = True
-    remove_qr_file()
+    from remote_login import run_remote_login
+    run_remote_login(sys.modules[__name__])
 
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=BROWSER_ARGS)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            page = context.new_page()
-            
-            logger.info("打开企业微信后台获取二维码...")
-            page.goto(WECHAT_URLS[0], wait_until="domcontentloaded", timeout=60000)
-            
-            iframe_element = page.frame_locator('iframe[src*="login_qrcode"], iframe#wx_reg')
-            qr_img_element = iframe_element.locator('.qrcode_login_img')
-            qr_img_element.wait_for(state="visible", timeout=25000)
-            
-            # 等待二维码图片完全渲染出来
-            time.sleep(1)
-            
-            # 【核心修复】直接对浏览器内的二维码元素进行截图！
-            # 严禁使用 requests.get 二次下载，否则会导致服务端刷新二维码造成前后端不一致
-            qr_img_element.screenshot(path=QR_PATH)
-            logger.info("✅ 二维码已通过元素截图保存，等待扫码...")
-            GLOBAL_STATE["status"] = "请扫码登录"
-            
-            send_pushplus(
-                "企微IP助手：需要扫码登录",
-                f"Cookie 已失效，请前往 Web 面板扫码或手动注入 Cookie。<br>当前公网IP: {GLOBAL_STATE['current_ip']}"
-            )
-            
-            # 循环等待扫码（共等待 120 秒）
-            for _ in range(240): # 240 * 0.5s = 120秒
-                if ABORT_QR_WAIT or not GLOBAL_STATE["need_login"]:
-                    logger.info("检测到登录状态被手动接管或强制刷新，立即中止当前二维码等待！")
-                    browser.close()
-                    return
-                
-                # 通过检查 cookies 中是否已经生成了企微后台的核心登录凭证 (wwrtx.sid) 或 URL 跳转来判定登录成功
-                current_cookies = context.cookies()
-                cookie_names = [c.get("name") for c in current_cookies]
-                is_logged_in = ("wwrtx.sid" in cookie_names or "wwrtx.ltype" in cookie_names) and ("frame" in page.url)
-                
-                if is_logged_in:
-                    try:
-                        if not page.locator('.login_stage_title_text').is_visible():
-                            logger.info("✅ 扫码登录成功！正在保存持久化 Cookie...")
-                            time.sleep(2) # 等待所有子域 Cookie 写入完毕
-                            save_cookies(context.cookies())
-                            remove_qr_file()
-                            GLOBAL_STATE["need_login"] = False
-                            GLOBAL_STATE["status"] = "正常运行中"
-                            browser.close()
-                            
-                            # 登录成功后立即安排一次 IP 同步
-                            scheduler.add_job(
-                                func=check_task,
-                                kwargs={"force_update": True},
-                                trigger='date',
-                                run_date=datetime.now(TZ) + timedelta(seconds=2),
-                                id="Post_Login_Check",
-                                replace_existing=True
-                            )
-                            return
-                    except Exception:
-                        pass
-                time.sleep(0.5)
-                
-            logger.warning("用户未在 2 分钟内扫码，本次等待流程结束。")
-            GLOBAL_STATE["status"] = "二维码已过期，请点击刷新二维码或手动注入"
-            browser.close()
-    except Exception as e:
-        logger.error(f"二维码获取流程异常: {e}")
-        GLOBAL_STATE["status"] = f"获取二维码失败: 请点击刷新重试"
 
-def sync_or_keepalive(ip_address, only_keep_alive=False):
-    """
-    only_keep_alive=True: 仅访问应用详情页刷新 Cookie，不点击配置弹窗
-    only_keep_alive=False: 走完整的修改可信 IP 流程
-    """
-    cookies = load_cookies()
-    if not cookies:
-        logger.warning("本地无可用 Cookie，转入登录流程...")
-        do_login_and_save_cookie()
-        return False
+def sync_or_keepalive(ip_address, only_keep_alive=False, candidate_cookies=None, read_only=False):
+    from sync_engine import sync_apps
+    return sync_apps(sys.modules[__name__], ip_address, candidate_cookies, read_only)
 
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=BROWSER_ARGS)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            context.add_cookies(cookies)
-            page = context.new_page()
-            
-            # 1. 访问第一个应用管理地址
-            page.goto(WECHAT_URLS[0], wait_until="domcontentloaded", timeout=45000)
-            
-            # 等待后台核心元素或登录框出现（二选一，最多等 25 秒）
-            page.wait_for_selector(
-                'div.app_card_operate.js_show_ipConfig_dialog, .login_stage_title_text, iframe[src*="login_qrcode"]',
-                timeout=25000
-            )
 
-            # 2. 检查是否掉线跳回了登录页
-            if page.locator('.login_stage_title_text').is_visible() or page.locator('iframe[src*="login_qrcode"]').is_visible() or "loginpage" in page.url.lower():
-                logger.warning("⚠️ 检测到企微登录框，Cookie 确已失效！")
-                browser.close()
-                do_login_and_save_cookie()
-                return False
-            
-            # 3. 确认在线！等待 2 秒后将最新 Cookie 覆写回本地实现续期
-            time.sleep(2)
-            GLOBAL_STATE["need_login"] = False
-            GLOBAL_STATE["status"] = "正常运行中"
-            GLOBAL_STATE["last_check"] = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
-            save_cookies(context.cookies())
-            remove_qr_file()
-            
-            # 如果只是例行保活，到此直接结束！
-            if only_keep_alive:
-                logger.info(f"💚 Cookie 保活与续期成功 (当前公网IP: {ip_address} 未变动)")
-                browser.close()
-                return True
-
-            # 4. 当 IP 发生变化或强制触发时，遍历所有应用修改可信 IP
-            for idx, url in enumerate(WECHAT_URLS):
-                logger.info(f"正在为第 {idx+1} 个应用配置可信 IP: {ip_address} ...")
-                if idx > 0:
-                    page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                    time.sleep(2)
-                
-                operate_btn = page.locator('div.app_card_operate.js_show_ipConfig_dialog')
-                operate_btn.wait_for(state="visible", timeout=30000)
-                operate_btn.click()
-                
-                input_area = page.locator('textarea.js_ipConfig_textarea')
-                input_area.wait_for(state="visible", timeout=15000)
-                confirm_btn = page.locator('.js_ipConfig_confirmBtn')
-                
-                existing_ip = input_area.input_value()
-                if OVERWRITE:
-                    input_area.fill(ip_address)
-                else:
-                    ips = [i.strip() for i in existing_ip.split(';') if i.strip()]
-                    if ip_address not in ips:
-                        ips.append(ip_address)
-                    input_area.fill(';'.join(ips))
-                
-                confirm_btn.click()
-                time.sleep(2)
-                logger.info(f"✅ 应用 {idx+1} 可信 IP 配置成功: {ip_address}")
-            
-            save_cookies(context.cookies())
-            old_ip = GLOBAL_STATE["current_ip"]
-            GLOBAL_STATE["current_ip"] = ip_address
-            save_last_ip(ip_address)
-            
-            if old_ip != ip_address:
-                send_pushplus("企微IP助手：公网IP已更新", f"可信 IP 已自动同步为：<b>{ip_address}</b><br>(原 IP: {old_ip})")
-                
-            browser.close()
-            return True
-
-    except PlaywrightTimeoutError as te:
-        logger.warning(f"⏳ 访问企微后台网络超时，保留现有 Cookie 等待下次重试: {te}")
-        return False
-    except Exception as e:
-        logger.error(f"❌ 执行过程发生异常，保留现有 Cookie: {e}")
-        return False
-
-def check_task(force_update=False, force_login=False):
+def check_task(force_update=False, force_login=False, candidate_cookies=None, read_only=False):
     if not WECHAT_URLS:
-        logger.error("未配置 WECHAT_URLS 环境变量！")
-        GLOBAL_STATE["status"] = "配置缺失 (WECHAT_URLS)"
+        update_state(status="未配置企业微信应用地址", last_error="WECHAT_URLS 缺失")
+        emit_event('ERROR', '未配置企业微信应用地址，无法检查')
         return
-
-    # 尝试获取锁，最多等待 5 秒（确保手动中断旧任务后，新任务能顺利接管锁）
-    if not TASK_LOCK.acquire(timeout=5):
-        logger.info("当前已有任务正在运行且未释放锁，跳过本次触发...")
+    if not TASK_LOCK.acquire(timeout=1):
+        if force_login:
+            update_state(login_requested=False,login_status='error',login_message='其他检查任务正在运行，本次登录窗口未打开，请稍后重新获取')
+            emit_event('WARNING','登录窗口未打开：后台任务繁忙，已解除等待状态，可稍后重试；Cookie 保留')
+        elif candidate_cookies is not None:
+            update_state(candidate_pending=False,status='后台任务繁忙，新 Cookie 尚未验证，请稍后重新提交')
+            emit_event('WARNING','新 Cookie 尚未验证：后台任务繁忙，请稍后重新提交；原 Cookie 保留')
+        else:
+            emit_event('INFO', '已有检查或登录任务运行，本次检查跳过')
         return
-
+    update_state(check_active=True)
     try:
-        if force_login or (GLOBAL_STATE["need_login"] and not load_cookies()):
+        if force_login:
+            update_state(login_requested=False)
             do_login_and_save_cookie()
             return
-
-        logger.info("开始检测公网IP...")
+        update_state(last_check=timestamp(), status='正在检测公网 IP 并验证企业微信后台')
+        emit_event('INFO', '开始检查公网 IP、Cookie 和企业微信可信 IP')
         current_ip = get_public_ip()
         if not current_ip:
-            logger.error("获取公网IP失败，跳过本次检测")
+            update_state(status='获取公网 IP 失败，本次未修改企业微信配置', sync_status='unconfirmed', last_error='公网 IP 检测失败')
+            emit_event('ERROR', '获取公网 IP 失败，保留 Cookie 和可信 IP，等待下次重试')
             return
-
-        logger.info(f"当前公网IP: {current_ip}")
-        ip_changed = (current_ip != GLOBAL_STATE["current_ip"]) or (GLOBAL_STATE["current_ip"] in ["192.168.1.1", "未记录", "获取中..."])
-        
-        if force_update or ip_changed:
-            logger.info(f"🔄 准备同步配置或验证最新 Cookie (当前IP: {current_ip}, 历史记录: {GLOBAL_STATE['current_ip']})...")
-            sync_or_keepalive(current_ip, only_keep_alive=False)
-        else:
-            sync_or_keepalive(current_ip, only_keep_alive=True)
+        update_state(public_ip=current_ip, ip_checked_at=timestamp())
+        emit_event('INFO', '检测到当前公网 IP：'+current_ip)
+        sync_or_keepalive(current_ip, candidate_cookies=candidate_cookies, read_only=read_only)
     finally:
+        update_state(check_active=False)
+        if candidate_cookies is not None:update_state(candidate_pending=False)
         TASK_LOCK.release()
 
 # ================= Web 路由服务 =================
+@app.get('/favicon.ico')
+def favicon():
+    return send_from_directory(app.static_folder, 'favicon.ico', mimetype='image/vnd.microsoft.icon', max_age=86400)
+
 @app.route('/')
 def index():
     return render_template(
@@ -397,120 +278,103 @@ def index():
         current_ip=GLOBAL_STATE["current_ip"],
         last_check=GLOBAL_STATE["last_check"],
         qr_exists=os.path.exists(QR_PATH),
+        is_fetching=GLOBAL_STATE.get("login_active", False),
         time=int(time.time())
     )
 
 @app.route('/qr.png')
 def serve_qr():
     if os.path.exists(QR_PATH):
-        return send_from_directory(DATA_DIR, 'qr.png')
+        response=send_from_directory(DATA_DIR, 'qr.png', max_age=0)
+        response.headers['Cache-Control']='no-store'
+        return response
     return "QR not found", 404
 
 @app.route('/update_cookie', methods=['POST'])
 def update_cookie():
-    global ABORT_QR_WAIT
-    
-    # 兼容前端所有可能的表单字段命名习惯 (cookie, cookie_str, content, text, data)
-    cookie_str = ""
-    for key in ['cookie', 'cookie_str', 'content', 'text', 'data', 'cookieContent']:
-        val = request.form.get(key, '').strip()
-        if val:
-            cookie_str = val
-            break
-            
-    # 如果表单里没有，尝试从 JSON 请求体中获取
-    if not cookie_str and request.is_json and request.json:
-        for key in ['cookie', 'cookie_str', 'content', 'text', 'data', 'cookieContent']:
-            val = request.json.get(key, '').strip()
-            if val:
-                cookie_str = val
+    with STATE_LOCK:
+        if GLOBAL_STATE['login_active'] or GLOBAL_STATE['login_requested'] or GLOBAL_STATE['check_active'] or GLOBAL_STATE['candidate_pending']:
+            return jsonify(error='当前任务尚未结束，请稍后提交 Cookie'), 409
+        payload=request.get_json(silent=True) if request.is_json else request.form
+        cookie_str=''
+        for key in ['cookie','cookie_str','cookie_data','content','text','data','cookieContent']:
+            value=(payload or {}).get(key)
+            if isinstance(value,str) and value.strip():
+                cookie_str=value.strip()
                 break
-                
-    # 如果前端直接把一整串字符串放在表单的第一个参数或者其它地方，做个兜底
-    if not cookie_str and request.form:
-        # 取第一个非空的表单值
-        for k, v in request.form.items():
-            if v and len(v.strip()) > 10: # Cookie 通常很长
-                cookie_str = v.strip()
-                break
+        cookies=parse_cookie_string(cookie_str)
+        if not cookies:return jsonify(error='Cookie 为空或格式不正确'),400
+        update_state(candidate_pending=True,status='新 Cookie 正在等待验证，原 Cookie 保持不变')
+        schedule_check('Manual_Cookie_Check',candidate_cookies=cookies)
+    emit_event('INFO','收到新 Cookie；将在验证成功后替换保存，当前文件保持不变')
+    return jsonify(status='ok',msg='已提交验证；验证成功后才替换原 Cookie'),202
 
-    logger.info(f"📥 收到网页提交的手动 Cookie 请求 (长度: {len(cookie_str)})")
-    
-    if cookie_str:
-        cookies = parse_cookie_string(cookie_str)
-        if cookies:
-            save_cookies(cookies)
-            remove_qr_file()
-            GLOBAL_STATE["need_login"] = False
-            GLOBAL_STATE["status"] = "已注入Cookie，正在后台验证并同步IP..."
-            ABORT_QR_WAIT = True # 通知扫码线程立刻退出
-            
-            scheduler.add_job(
-                func=check_task,
-                kwargs={"force_update": True},
-                trigger='date',
-                run_date=datetime.now(TZ) + timedelta(seconds=1),
-                id="Manual_Cookie_Check",
-                replace_existing=True
-            )
-        else:
-            logger.warning("⚠️ 解析出的 Cookie 列表为空，格式可能不正确！")
-    else:
-        logger.warning("⚠️ 提交的 Cookie 内容为空，请检查前端 HTML 模板中的表单 name 属性！")
-        
-    return redirect(f'/?t={int(time.time())}')
 
-@app.route('/check_ip_api', methods=['GET', 'POST'])
+@app.route('/check_ip_api', methods=['POST'])
 def check_ip_api():
-    logger.info("🔍 收到网页端发起的立即检测 IP 请求...")
-    scheduler.add_job(
-        func=check_task,
-        kwargs={"force_update": True},
-        trigger='date',
-        run_date=datetime.now(TZ) + timedelta(seconds=1),
-        id="Manual_IP_Check",
-        replace_existing=True
-    )
-    msg = "检测与同步任务已在后台触发，请稍后刷新页面查看结果！"
-    return jsonify({"status": "ok", "msg": msg, "message": msg})
+    if GLOBAL_STATE['check_active'] or GLOBAL_STATE['login_active'] or GLOBAL_STATE['login_requested'] or GLOBAL_STATE['candidate_pending']:
+        return jsonify(error='当前已有任务运行，请等待完成或先结束登录窗口'),409
+    schedule_check('Manual_IP_Check',force_update=True)
+    emit_event('INFO','已收到立即检查并同步的请求')
+    return jsonify(status='ok',msg='已安排检查 Cookie 和可信 IP；结果会写入运行日志')
 
-# 同时绑定 /refresh_qr, /relogin, /refresh_qrcode_api，彻底杜绝前端按钮路由不匹配或卡住
-@app.route('/refresh_qr', methods=['GET', 'POST'])
-@app.route('/relogin', methods=['GET', 'POST'])
-@app.route('/refresh_qrcode_api', methods=['GET', 'POST'])
+
+@app.route('/refresh_qr_api', methods=['POST'])
+@app.route('/refresh_qr', methods=['POST'])
+@app.route('/relogin', methods=['POST'])
+@app.route('/refresh_qrcode_api', methods=['POST'])
 def refresh_qr():
+    with STATE_LOCK:
+        if GLOBAL_STATE['login_active'] or GLOBAL_STATE['login_requested']:
+            return jsonify(status='ok',active=True,msg='登录窗口已打开；二维码过期时可结束后重新获取')
+        if GLOBAL_STATE['check_active'] or GLOBAL_STATE['candidate_pending']:
+            return jsonify(error='正在检查后台，请检查结束后再获取二维码'),409
+        remove_qr_file()
+        update_state(login_requested=True,login_status='queued')
+        schedule_check('Manual_Relogin',force_login=True)
+    emit_event('INFO','已请求新的登录窗口；现有 Cookie 保留，成功登录后才替换')
+    return jsonify(status='ok',msg='正在准备登录二维码；现有 Cookie 不会被清除')
+
+
+@app.get('/status_api')
+def status_api():
+    with STATE_LOCK:data=dict(GLOBAL_STATE)
+    data['qr_exists']=bool(GLOBAL_STATE['login_active'] and os.path.exists(QR_PATH))
+    data['cookie_file_exists']=os.path.exists(COOKIE_FILE)
+    data['check_cron']=CHECK_CRON
+    job=scheduler.get_job('IP_Checker')
+    next_run=getattr(job,'next_run_time',None)
+    data['next_check']=next_run.astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if next_run else None
+    data['server_time']=timestamp()
+    return jsonify(data)
+
+
+@app.get('/logs_api')
+def logs_api():
+    return jsonify(logs=EVENTS.snapshot())
+
+
+@app.post('/cancel_login_api')
+def cancel_login():
     global ABORT_QR_WAIT
-    logger.info("🔄 收到网页端发起的强制刷新二维码请求...")
-    ABORT_QR_WAIT = True
-    remove_qr_file()
-    if os.path.exists(COOKIE_FILE):
-        try:
-            os.remove(COOKIE_FILE)
-        except Exception:
-            pass
-    GLOBAL_STATE["need_login"] = True
-    GLOBAL_STATE["status"] = "正在重新获取二维码，请稍候刷新页面..."
-    
-    scheduler.add_job(
-        func=check_task,
-        kwargs={"force_login": True},
-        trigger='date',
-        run_date=datetime.now(TZ) + timedelta(seconds=1),
-        id="Manual_Relogin",
-        replace_existing=True
-    )
-    
-    # 如果前端是通过 fetch/ajax 异步请求的，返回 JSON 防止前端卡死；如果是普通链接跳转，则重定向回首页
-    if request.path.endswith('_api') or request.headers.get('X-Requested-With') == 'XMLHttpRequest' or 'application/json' in request.headers.get('Accept', ''):
-        msg = "正在后台重新抓取二维码，请等待约 5 秒后刷新页面！"
-        return jsonify({"status": "ok", "msg": msg, "message": msg})
-    return redirect(f'/?t={int(time.time())}')
+    ABORT_QR_WAIT=True
+    if GLOBAL_STATE['login_requested']:
+        try:scheduler.remove_job('Manual_Relogin')
+        except Exception:pass
+        update_state(login_requested=False,login_status='idle')
+    emit_event('INFO','已请求结束登录窗口；原 Cookie 保留')
+    return jsonify(status='ok',msg='正在结束登录窗口，原 Cookie 保留')
+
+
+@app.get('/remote-login')
+def remote_login_page():
+    return render_template('remote.html')
 
 if __name__ == "__main__":
-    logger.info("🚀 系统启动，优先启动 Web 服务，首次检测将延迟 5 秒执行...")
+    emit_event("INFO", "服务启动，将使用已保存的 Cookie 验证后台并读取可信 IP")
     if load_cookies():
         GLOBAL_STATE["need_login"] = False
-        GLOBAL_STATE["status"] = "正常运行中"
+        GLOBAL_STATE["status"] = "已找到 Cookie，等待实际验证（文件存在不代表有效）"
     else:
         GLOBAL_STATE["need_login"] = True
 
@@ -529,4 +393,4 @@ if __name__ == "__main__":
     )
     scheduler.start()
 
-    app.run(host='0.0.0.0', port=8080, use_reloader=False)
+    app.run(host='127.0.0.1', port=8081, use_reloader=False, threaded=True)
