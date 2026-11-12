@@ -48,9 +48,11 @@ def sync_apps(owner,ip_address,candidate_cookies=None,read_only=False):
                             owner.update_state(status='提交的 Cookie 未通过验证，原 Cookie 已保留',sync_status='unknown',last_error='新 Cookie 无法进入应用后台')
                             owner.emit_event('WARNING','提交的 Cookie 无效；未替换原 Cookie')
                         else:
+                            already_invalid=owner.GLOBAL_STATE.get('cookie_status')=='invalid'
                             owner.update_state(cookie_status='invalid',cookie_checked_at=timestamp(),need_login=True,sync_status='waiting',status='Cookie 已失效，请重新登录')
                             owner.emit_event('WARNING','Cookie 验证失败：企业微信返回登录页面；保留文件等待重新登录')
-                            owner.schedule_check('Expired_Cookie_Login',force_login=True)
+                            if not already_invalid:
+                                owner.schedule_check('Expired_Cookie_Login',force_login=True)
                         return False
                     if not verified:
                         if not owner.save_cookies(context.cookies()):
